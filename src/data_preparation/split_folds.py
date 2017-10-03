@@ -28,7 +28,7 @@ class Splitter(object):
         self.files = []
         for i in range(n_folds):
             with open(f"{output_dir}/fold_{i}.csv", "w") as f:
-                f.write("image_id,category_id,product_id\n")
+                f.write("image_id,product_id,category_id\n")
             self.files.append(open(f"{output_dir}/fold_{i}.csv", "a"))
 
     def _add_to_fold(self, n_fold, image_id, product_id, category_id):
