@@ -1,7 +1,7 @@
 import torch.utils.data as data
 import pandas as pd
 from skimage.io import imread
-import numpy as np
+from skimage.transform import resize
 
 class Dataset(data.Dataset):
     def __init__(self, n_fold, n_folds, transform=None, train=True):
@@ -25,16 +25,16 @@ class Dataset(data.Dataset):
 
     @staticmethod
     def _load(image):
-        return imread(f"../data/images/train/{image}.jpg")
+        img = imread(f"../data/images/train/{image}.jpg")
+        img = resize(img, (256, 256), mode='constant')
+        return img
 
     def __getitem__(self, idx):
         X = self._load(self.images[idx])
         if self.transform:
             X = self.transform(X)
         y = self.labels_map.ix[self.labels[idx]].label_id
-        label_vector = np.zeros(self.num_classes)
-        label_vector[y] = 1
-        return X, label_vector
+        return X, y
 
 
 def get_loaders(batch_size,
@@ -55,5 +55,5 @@ def get_loaders(batch_size,
                                    shuffle=True,
                                    num_workers=6,
                                    pin_memory=True)
-    return train_loader, valid_loader
+    return train_loader, valid_loader, train_dataset.num_classes
 
