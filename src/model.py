@@ -63,8 +63,10 @@ def train(args,
     optimizer = init_optimizer(lr)
 
     root = Path(args['root'])
-    model_path = root / 'model_{}_{}.pt'.format(architecture, args['fold'])
-    best_model_path = root / 'best-model_{}_{}.pt'.format(architecture, args['fold'])
+    if not root.exists():
+        root.mkdir()
+    model_path = root / 'model_{}.pt'.format(args['fold'])
+    best_model_path = root / 'best-model_{}.pt'.format(args['fold'])
     if model_path.exists():
         state = torch.load(str(model_path))
         epoch = state['epoch']
@@ -86,7 +88,7 @@ def train(args,
 
     report_each = 10
     save_prediction_each = report_each * 20
-    log = root.joinpath('train_{}_{}.log'.format(architecture, args['fold'])).open('at', encoding='utf8')
+    log = root.joinpath('train_{}.log'.format(args['fold'])).open('at', encoding='utf8')
     valid_losses = []
     lr_reset_epoch = epoch
     batch_size = args['batch_size']
@@ -164,7 +166,7 @@ class Model(object):
         criterion = CrossEntropyLoss()
 
         train_kwargs = dict(
-            args=dict(lr=lr, n_epochs=epochs, root="../results", fold=fold, batch_size=batch_size, epoch_size=epoch_size),
+            args=dict(lr=lr, n_epochs=epochs, root=f"../results/{architecture}", fold=fold, batch_size=batch_size, epoch_size=epoch_size),
             model=model,
             criterion=criterion,
             train_loader=train_loader,
