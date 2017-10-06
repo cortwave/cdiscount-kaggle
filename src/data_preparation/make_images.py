@@ -32,7 +32,7 @@ def make_train():
     out_path = "../../data/images/train"
     for directory in (out_path, f'{out_path}/low_contrast/'):
         if not os.path.exists(directory):
-            os.mkdir(out_path)
+            os.mkdir(directory)
     make_images("../../data/train.bson", out_path)
 
 
@@ -41,7 +41,7 @@ def make_test():
     out_path = "../../data/images/test"
     for directory in (out_path, f'{out_path}/low_contrast/'):
         if not os.path.exists(directory):
-            os.mkdir(out_path)
+            os.mkdir(directory)
     make_images("../../data/test.bson", out_path)
 
 
@@ -49,5 +49,5 @@ if __name__ == '__main__':
     path = "../../data/images"
     if not os.path.exists(path):
         os.mkdir(path)
-    make_train()
+    # make_train()
     make_test()
