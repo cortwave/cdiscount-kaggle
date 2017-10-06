@@ -23,23 +23,25 @@ def make_images(input_file, output_dir):
                 except Warning:
                     warnings.filterwarnings('ignore')
                     img = imread(io.BytesIO(pic['picture']))
-                    imsave(f"../../data/images/low_contrast/{product_id}_{ix}.jpg", img)
+                    imsave(f'{output_dir}/low_contrast/{product_id}_{ix}.jpg', img)
                     imsave(f"{output_dir}/{product_id}_{ix}.jpg", img)
 
 
 def make_train():
     logger.info("Train set transforming")
     out_path = "../../data/images/train"
-    if not os.path.exists(out_path):
-        os.mkdir(out_path)
+    for directory in (out_path, f'{out_path}/low_contrast/'):
+        if not os.path.exists(directory):
+            os.mkdir(out_path)
     make_images("../../data/train.bson", out_path)
 
 
 def make_test():
     logger.info("Test set transforming")
     out_path = "../../data/images/test"
-    if not os.path.exists(out_path):
-        os.mkdir(out_path)
+    for directory in (out_path, f'{out_path}/low_contrast/'):
+        if not os.path.exists(directory):
+            os.mkdir(out_path)
     make_images("../../data/test.bson", out_path)
 
 
