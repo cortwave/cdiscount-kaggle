@@ -12,7 +12,7 @@ import torch
 from datetime import datetime
 import shutil
 import json
-from transforms import normalize
+from transforms import train_augm, valid_augm
 from pt_util import variable, long_tensor
 from metrics import accuracy
 from fire import Fire
@@ -53,7 +53,6 @@ def train(args,
           valid_loader,
           validation,
           init_optimizer,
-          architecture,
           validation_size,
           save_predictions=None,
           n_epochs=None,
@@ -156,11 +155,10 @@ class Model(object):
               f"epochs = {epochs}",
               f"epoch_size = {epoch_size}",
               f"validation_size = {validation_size}")
-        transformation = normalize()
 
         train_loader, valid_loader, num_classes = get_loaders(batch_size,
-                                                              train_transform=transformation,
-                                                              valid_transform=transformation,
+                                                              train_transform=train_augm(),
+                                                              valid_transform=valid_augm(),
                                                               n_fold=fold)
         model = self._get_model(num_classes, architecture)
         criterion = CrossEntropyLoss()
@@ -173,8 +171,7 @@ class Model(object):
             valid_loader=valid_loader,
             validation=validation,
             validation_size=validation_size,
-            patience=4,
-            architecture=architecture
+            patience=4
         )
         init_optimizer = lambda x: Adam(model.parameters(), lr=x)
         train(init_optimizer=init_optimizer, **train_kwargs)

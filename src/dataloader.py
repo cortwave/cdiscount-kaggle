@@ -1,7 +1,7 @@
 import torch.utils.data as data
 import pandas as pd
 from skimage.io import imread
-from skimage.transform import resize
+from skimage.util import pad
 
 class Dataset(data.Dataset):
     def __init__(self, n_fold, n_folds, transform=None, train=True):
@@ -26,7 +26,7 @@ class Dataset(data.Dataset):
     @staticmethod
     def _load(image):
         img = imread(f"../data/images/train/{image}.jpg")
-        img = resize(img, (256, 256), mode='constant')
+        img = pad(pad_width=((38, 38), (38, 38), (0, 0)), array=img, mode='maximum')
         return img
 
     def __getitem__(self, idx):
