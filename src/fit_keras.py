@@ -4,17 +4,15 @@ from os import environ
 
 import numpy as np
 import pandas as pd
-from skimage.io import imread
-from scipy.misc import imresize
+from cv2 import imread, resize
 from keras.applications.resnet50 import ResNet50, preprocess_input
 from keras.applications.inception_v3 import InceptionV3, preprocess_input as preprocess_xcept
 from keras.applications.xception import Xception
-from keras.models import Model
+from keras.models import Model, load_model
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
 from keras.optimizers import Adam
 from keras.layers import Dense
 from keras.utils import to_categorical
-
 from fire import Fire
 from imgaug import augmenters as iaa
 
@@ -55,11 +53,11 @@ class Dataset:
         else:
             df = pd.read_csv(f"../data/fold_{n_fold}.csv")
         labels_map = pd.read_csv("../data/labels_map.csv")
-        labels_map.index = labels_map.category_id
-        self.num_classes = labels_map.shape[0]
-        self.labels_map = labels_map
+        labels_map = {k: v for k, v in zip(labels_map.category_id, labels_map.label_id)}
+        self.num_classes = len(labels_map)
         self.images = df.image_id.values
-        self.labels = df.category_id.values
+        self.labels = np.array([labels_map[x] for x in df.category_id.values])
+        self.num_images = self.images.shape[0]
         self.transform = transform
         self.shape = shape
         self.aug = aug
@@ -72,13 +70,14 @@ class Dataset:
     def _load(self, image):
         img = imread(f"../data/images/train/{image}.jpg")
         if self.shape != (180, 180):
-            img = imresize(img, self.shape)
+            img = resize(img, self.shape)
         return img
 
     @threadsafe_generator
     def get_batch(self, batch_size):
+        batch_size = int(batch_size)
         while True:
-            idx = np.random.choice(np.arange(self.images.shape[0]), int(batch_size), replace=False)
+            idx = np.random.randint(0, self.num_images, batch_size)
             yield self._get_images(idx)
 
     def _get_images(self, idx_batch):
@@ -88,7 +87,7 @@ class Dataset:
             X = self.augmenter.augment_images(X)
         if self.transform:
             X = self.transform(X)
-        y = to_categorical(np.array([self.labels_map.ix[self.labels[idx]].label_id for idx in idx_batch]),
+        y = to_categorical(self.labels[idx_batch],
                            num_classes=self.num_classes)
         return X, y
 
@@ -125,7 +124,7 @@ def get_model(model_name, n_classes):
     for layer in base_model.layers:
         layer.trainable = False
 
-    model.compile(optimizer=Adam(clipvalue=2), loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer=Adam(clipvalue=2, clipnorm=1), loss='categorical_crossentropy', metrics=['accuracy'])
     return model, preprocess, shape
 
 
@@ -155,26 +154,37 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1'):
                   shape=shape,
                   aug=False)
 
-    model.fit_generator(train.get_batch(batch_size),
-                        epochs=500,
-                        steps_per_epoch=1000,
-                        validation_data=val.get_batch(batch_size),
-                        workers=8,
-                        validation_steps=100,
-                        callbacks=[EarlyStopping(monitor='val_loss', min_delta=0, patience=2, verbose=1, mode='auto')]
-                        )
+    fname = f'../results/{model_name}_{n_fold}.h5'
+
+    try:
+        model = load_model(fname)
+    except OSError:
+        model.fit_generator(train.get_batch(batch_size),
+                            epochs=5,
+                            steps_per_epoch=1000,
+                            validation_data=val.get_batch(batch_size),
+                            workers=8,
+                            validation_steps=100,
+                            use_multiprocessing=False,
+                            max_queue_size=50,
+                            callbacks=[ModelCheckpoint(f'../results/{model_name}_{n_fold}.h5',
+                                                       monitor='val_acc',
+                                                       save_best_only=True, verbose=0)]
+                            )
 
     for layer in model.layers:
         layer.trainable = True
 
-    model.compile(optimizer=Adam(clipvalue=3), loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer=Adam(clipvalue=2, clipnorm=1), loss='categorical_crossentropy', metrics=['accuracy'])
     model.fit_generator(train.get_batch(batch_size),
                         epochs=500,
-                        steps_per_epoch=500,
+                        steps_per_epoch=2000,
                         validation_data=val.get_batch(batch_size),
                         workers=8,
+                        use_multiprocessing=False,
                         validation_steps=100,
-                        callbacks=get_callbacks(model_name, fold)
+                        callbacks=get_callbacks(model_name, n_fold),
+                        initial_epoch=7,
                         )
 
 
