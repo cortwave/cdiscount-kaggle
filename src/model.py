@@ -1,5 +1,5 @@
 from torchvision.models import resnet152, resnet50, resnet101, densenet121, densenet161, densenet169, densenet201
-from dataloader import get_loaders
+from dataloader import get_loaders, get_test_loader
 from pathlib import Path
 import random
 import torch.nn as nn
@@ -16,6 +16,7 @@ from transforms import train_augm, valid_augm
 from pt_util import variable, long_tensor
 from metrics import accuracy
 from fire import Fire
+import pandas as pd
 
 
 def validation(model, criterion, valid_loader, validation_size, batch_size):
@@ -175,6 +176,30 @@ class Model(object):
         )
         init_optimizer = lambda x: Adam(model.parameters(), lr=x)
         train(init_optimizer=init_optimizer, **train_kwargs)
+
+    def predict(self, architecture, fold, tta, batch_size):
+        print("Start predicting with following params:",
+              f"architecture = {architecture}",
+              f"fold = {fold}",
+              f"tta = {tta}")
+        n_classes = 5270
+        model = self._get_model(num_classes=n_classes, architecture=architecture)
+        state = torch.load(f"../results/{architecture}/best-model_{fold}.pt")
+        model.load_state_dict(state['model'])
+        test_augm = valid_augm()
+        label_map = pd.read_csv("../data/labels_map.csv")
+        label_map.index = label_map['label_id']
+        test_loader = get_test_loader(batch_size, test_augm)
+        with open(f"../results/{architecture}/sub_{fold}.csv", "w") as f:
+            f.write("_id,category_id\n")
+            for images, product_ids in tqdm.tqdm(test_loader):
+                images = variable(images)
+                preds = model(images).data.cpu().numpy()
+                for pred, product_id in zip(preds, product_ids):
+                    label = np.argmax(pred, 0)
+                    cat_id = label_map.ix[label]['category_id']
+                    f.write(f"{product_id},{cat_id}\n")
+
 
     @staticmethod
     def _get_model(num_classes, architecture='resnet50'):
