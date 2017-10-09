@@ -1,15 +1,12 @@
 import torch.utils.data as data
 import pandas as pd
-from skimage.io import imread
-from skimage.util import pad
-import numpy as np
+from PIL import Image
 import os
 
 
 def load(image, train=True):
     folder = "train" if train else "test"
-    img = imread(f"../data/images/{folder}/{image}.jpg")
-    img = pad(pad_width=((38, 38), (38, 38), (0, 0)), array=img, mode='maximum')
+    img = Image.open(f"../data/images/{folder}/{image}.jpg")
     return img
 
 class Dataset(data.Dataset):

@@ -2,26 +2,18 @@ from torchvision import transforms
 from imgaug import augmenters as iaa
 
 
-def normalize():
+def crop_and_flip():
     return transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomCrop([160, 160]),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
 
 
-def flip_and_rotate():
-    return iaa.Sequential([
-        iaa.Fliplr(0.2),
-        iaa.Affine(rotate=(-45, 45), mode="edge")
-    ]).augment_image
-
-
 def train_augm():
-    return transforms.Compose([
-        flip_and_rotate(),
-        normalize()
-    ])
+    return crop_and_flip()
 
 
 def valid_augm():
-    return normalize()
+    return crop_and_flip()
