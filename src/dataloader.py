@@ -2,6 +2,15 @@ import torch.utils.data as data
 import pandas as pd
 from skimage.io import imread
 from skimage.util import pad
+import numpy as np
+import os
+
+
+def load(image, train=True):
+    folder = "train" if train else "test"
+    img = imread(f"../data/images/{folder}/{image}.jpg")
+    img = pad(pad_width=((38, 38), (38, 38), (0, 0)), array=img, mode='maximum')
+    return img
 
 class Dataset(data.Dataset):
     def __init__(self, n_fold, n_folds, transform=None, train=True):
@@ -23,18 +32,36 @@ class Dataset(data.Dataset):
     def __len__(self):
         return self.images.size
 
-    @staticmethod
-    def _load(image):
-        img = imread(f"../data/images/train/{image}.jpg")
-        img = pad(pad_width=((38, 38), (38, 38), (0, 0)), array=img, mode='maximum')
-        return img
-
     def __getitem__(self, idx):
-        X = self._load(self.images[idx])
+        X = load(self.images[idx])
         if self.transform:
             X = self.transform(X)
         y = self.labels_map.ix[self.labels[idx]].label_id
         return X, y
+
+
+class TestDataset(data.Dataset):
+    def __init__(self, transform):
+        self.images = list(filter(lambda x: "_0" in x, os.listdir("../data/images/test")))
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        img_name = self.images[idx].split(".")[0]
+        img = load(img_name, train=False)
+        img = self.transform(img)
+        return img, img_name.split("_")[0]
+
+
+def get_test_loader(batch_size, transform):
+    test_dataset = TestDataset(transform)
+    test_loader = data.DataLoader(test_dataset,
+                                  batch_size=batch_size,
+                                  shuffle=False,
+                                  num_workers=6)
+    return test_loader
 
 
 def get_loaders(batch_size,
@@ -56,4 +83,3 @@ def get_loaders(batch_size,
                                    num_workers=6,
                                    pin_memory=True)
     return train_loader, valid_loader, train_dataset.num_classes
-
