@@ -19,11 +19,12 @@ from fire import Fire
 import pandas as pd
 
 
-def validation(model, criterion, valid_loader, validation_size, batch_size, iter_size):
+def validate(model, criterion, valid_loader, validation_size, batch_size, iter_size):
     model.eval()
     losses = []
     accuracies = []
     batches_count = validation_size // batch_size
+    valid_loader = islice(valid_loader, batches_count)
     for i, (inputs, targets) in tqdm.tqdm(enumerate(valid_loader), total=batches_count, desc="validation"):
         inputs = variable(inputs, volatile=True)
         targets = variable(targets)
@@ -36,16 +37,12 @@ def validation(model, criterion, valid_loader, validation_size, batch_size, iter
             outputs = model(input)
             loss_iter = criterion(outputs, target)
             loss_iter /= batch_size
-            loss_iter = loss_iter.data[0]
-            loss += loss_iter
+            loss += loss_iter.data[0]
             acc_iter = accuracy(outputs, target)[0]
             acc_iter /= iter_size
-            acc_iter = acc_iter.data[0]
-            acc += acc_iter
+            acc += acc_iter.data[0]
         losses.append(loss)
         accuracies.append(acc)
-        if i > batches_count:
-            break
     valid_loss = np.mean(losses)
     valid_acc = np.mean(accuracies)
     print('Valid loss: {:.4f}, acc: {:.4f}'.format(valid_loss, valid_acc))
@@ -59,107 +56,6 @@ def write_event(log, step: int, **data):
     log.write('\n')
     log.flush()
 
-
-def train(args,
-          model: nn.Module,
-          criterion, *, train_loader,
-          valid_loader,
-          validation,
-          init_optimizer,
-          validation_size,
-          n_epochs=None,
-          patience=2):
-    lr = args['lr']
-    n_epochs = n_epochs or args['n_epochs']
-    optimizer = init_optimizer(lr)
-
-    root = Path(args['root'])
-    if not root.exists():
-        root.mkdir()
-    model_path = root / 'model_{}.pt'.format(args['fold'])
-    best_model_path = root / 'best-model_{}.pt'.format(args['fold'])
-    if model_path.exists():
-        state = torch.load(str(model_path))
-        epoch = state['epoch']
-        step = state['step']
-        best_valid_loss = state['best_valid_loss']
-        model.load_state_dict(state['model'])
-        print('Restored model, epoch {}, step {:,}'.format(epoch, step))
-    else:
-        epoch = 1
-        step = 0
-        best_valid_loss = float('inf')
-
-    save = lambda ep: torch.save({
-        'model': model.state_dict(),
-        'epoch': ep,
-        'step': step,
-        'best_valid_loss': best_valid_loss
-    }, str(model_path))
-
-    report_each = 10
-    log = root.joinpath('train_{}.log'.format(args['fold'])).open('at', encoding='utf8')
-    valid_losses = []
-    lr_reset_epoch = epoch
-    batch_size = args['batch_size']
-    iter_size = args['iter_size']
-    for epoch in range(epoch, n_epochs + 1):
-        model.train()
-        random.seed()
-        tq = tqdm.tqdm(total=(args['epoch_size'] or
-                              len(train_loader) * batch_size))
-        tq.set_description('Epoch {}, lr {}'.format(epoch, lr))
-        losses = []
-        tl = train_loader
-        if args['epoch_size']:
-            tl = islice(tl, args['epoch_size'] // batch_size)
-        try:
-            mean_loss = 0
-            for i, (inputs, targets) in enumerate(tl):
-                inputs, targets = variable(inputs), variable(targets)
-                targets = long_tensor(targets)
-                inputs_chunks = inputs.chunk(iter_size)
-                targets_chunks = targets.chunk(iter_size)
-                optimizer.zero_grad()
-
-                iter_loss = 0
-                for input, target in zip(inputs_chunks, targets_chunks):
-                    outputs = model(input)
-                    loss = criterion(outputs, target)
-                    loss /= batch_size
-                    iter_loss += loss.data[0]
-                    loss.backward()
-                optimizer.step()
-                step += 1
-                tq.update(batch_size)
-                losses.append(iter_loss)
-                mean_loss = np.mean(losses[-report_each:])
-                tq.set_postfix(loss='{:.3f}'.format(mean_loss))
-                if i and i % report_each == 0:
-                    write_event(log, step, loss=mean_loss)
-            write_event(log, step, loss=mean_loss)
-            tq.close()
-            save(epoch + 1)
-            valid_metrics = validation(model, criterion, valid_loader, validation_size, batch_size, iter_size)
-            write_event(log, step, **valid_metrics)
-            valid_loss = valid_metrics['valid_loss']
-            valid_losses.append(valid_loss)
-            if valid_loss < best_valid_loss:
-                best_valid_loss = valid_loss
-                shutil.copy(str(model_path), str(best_model_path))
-            elif (patience and epoch - lr_reset_epoch > patience and
-                  min(valid_losses[-patience:]) > best_valid_loss):
-                # "patience" epochs without improvement
-                lr /= 5
-                lr_reset_epoch = epoch
-                optimizer = init_optimizer(lr)
-        except KeyboardInterrupt:
-            tq.close()
-            print('Ctrl+C, saving snapshot')
-            save(epoch)
-            print('done.')
-            break
-    return
 
 class Model(object):
     def train(self, architecture, fold, lr, batch_size, epochs, epoch_size, validation_size, iter_size):
@@ -180,18 +76,129 @@ class Model(object):
         model = self._get_model(num_classes, architecture)
         criterion = CrossEntropyLoss(size_average=False)
 
+        self.lr = lr
+        self.model = model
+        self.root = Path(f"../results/{architecture}")
+        self.fold = fold
         train_kwargs = dict(
-            args=dict(iter_size=iter_size, lr=lr, n_epochs=epochs, root=f"../results/{architecture}", fold=fold, batch_size=batch_size, epoch_size=epoch_size),
+            args=dict(iter_size=iter_size, n_epochs=epochs,
+                      batch_size=batch_size, epoch_size=epoch_size),
             model=model,
             criterion=criterion,
             train_loader=train_loader,
             valid_loader=valid_loader,
-            validation=validation,
             validation_size=validation_size,
             patience=4
         )
-        init_optimizer = lambda x: Adam(model.parameters(), lr=x)
-        train(init_optimizer=init_optimizer, **train_kwargs)
+        self._train(**train_kwargs)
+
+    def _init_optimizer(self):
+        return Adam(self.model.parameters(), lr=self.lr)
+
+    def _init_files(self):
+        if not self.root.exists():
+            self.root.mkdir()
+        self.log = self.root.joinpath('train_{}.log'.format(self.fold)).open('at', encoding='utf8')
+        self.model_path = self.root / 'model_{}.pt'.format(self.fold)
+        self.best_model_path = self.root / 'best-model_{}.pt'.format(self.fold)
+
+    def _init_model(self):
+        if self.model_path.exists():
+            state = torch.load(str(self.model_path))
+            self.epoch = state['epoch']
+            self.step = state['step']
+            self.best_valid_loss = state['best_valid_loss']
+            self.model.load_state_dict(state['model'])
+            print('Restored model, epoch {}, step {:,}'.format(self.epoch, self.step))
+        else:
+            self.epoch = 1
+            self.step = 0
+            self.best_valid_loss = float('inf')
+
+    def _save_model(self, epoch):
+        torch.save({
+            'model': self.model.state_dict(),
+            'epoch': epoch,
+            'step': self.step,
+            'best_valid_loss': self.best_valid_loss
+        }, str(self.model_path))
+
+    def _train(self,
+               args,
+               model: nn.Module,
+               criterion,
+               *,
+               train_loader,
+               valid_loader,
+               validation_size,
+               patience=2):
+        lr = self.lr
+        n_epochs = args['n_epochs']
+        optimizer = self._init_optimizer()
+        self._init_files()
+        self._init_model()
+
+        report_each = 10
+        valid_losses = []
+        lr_reset_epoch = self.epoch
+        batch_size = args['batch_size']
+        iter_size = args['iter_size']
+        for epoch in range(self.epoch, n_epochs + 1):
+            model.train()
+            random.seed()
+            tq = tqdm.tqdm(total=(args['epoch_size'] or
+                                  len(train_loader) * batch_size))
+            tq.set_description('Epoch {}, lr {}'.format(epoch, lr))
+            losses = []
+            tl = train_loader
+            if args['epoch_size']:
+                tl = islice(tl, args['epoch_size'] // batch_size)
+            try:
+                mean_loss = 0
+                for i, (inputs, targets) in enumerate(tl):
+                    inputs, targets = variable(inputs), variable(targets)
+                    targets = long_tensor(targets)
+                    inputs_chunks = inputs.chunk(iter_size)
+                    targets_chunks = targets.chunk(iter_size)
+                    optimizer.zero_grad()
+
+                    iter_loss = 0
+                    for input, target in zip(inputs_chunks, targets_chunks):
+                        outputs = model(input)
+                        loss = criterion(outputs, target)
+                        loss /= batch_size
+                        iter_loss += loss.data[0]
+                        loss.backward()
+                    optimizer.step()
+                    self.step += 1
+                    tq.update(batch_size)
+                    losses.append(iter_loss)
+                    mean_loss = np.mean(losses[-report_each:])
+                    tq.set_postfix(loss='{:.3f}'.format(mean_loss))
+                    if i and i % report_each == 0:
+                        write_event(self.log, self.step, loss=mean_loss)
+                write_event(self.log, self.step, loss=mean_loss)
+                tq.close()
+                self._save_model(epoch + 1)
+                valid_metrics = validate(model, criterion, valid_loader, validation_size, batch_size, iter_size)
+                write_event(self.log, self.step, **valid_metrics)
+                valid_loss = valid_metrics['valid_loss']
+                valid_losses.append(valid_loss)
+                if valid_loss < self.best_valid_loss:
+                    self.best_valid_loss = valid_loss
+                    shutil.copy(str(self.model_path), str(self.best_model_path))
+                elif (patience and epoch - lr_reset_epoch > patience and
+                              min(valid_losses[-patience:]) > self.best_valid_loss):
+                    lr /= 5
+                    lr_reset_epoch = epoch
+                    optimizer = self._init_optimizer()
+            except KeyboardInterrupt:
+                tq.close()
+                print('Ctrl+C, saving snapshot')
+                self._save_model(epoch)
+                print('done.')
+                break
+        return
 
     def predict(self, architecture, fold, tta, batch_size):
         print("Start predicting with following params:",
@@ -215,7 +222,6 @@ class Model(object):
                     label = np.argmax(pred, 0)
                     cat_id = label_map.ix[label]['category_id']
                     f.write(f"{product_id},{cat_id}\n")
-
 
     @staticmethod
     def _get_model(num_classes, architecture='resnet50'):

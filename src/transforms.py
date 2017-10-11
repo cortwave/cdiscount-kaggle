@@ -1,5 +1,4 @@
 from torchvision import transforms
-from imgaug import augmenters as iaa
 
 
 def crop_and_flip():

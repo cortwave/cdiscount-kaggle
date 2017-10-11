@@ -20,6 +20,7 @@ class Dataset(data.Dataset):
             df = pd.read_csv(f"../data/fold_{n_fold}.csv")
         labels_map = pd.read_csv("../data/labels_map.csv")
         labels_map.index = labels_map.category_id
+        df = df[df.image_id.str.contains("_0")]
         self.num_classes = labels_map.shape[0]
         self.labels_map = labels_map
         self.images = df.image_id.values
