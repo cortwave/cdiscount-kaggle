@@ -200,7 +200,7 @@ class Model(object):
                 break
         return
 
-    def predict(self, architecture, fold, tta, batch_size):
+    def predict(self, architecture, fold, tta, batch_size, name="sub"):
         print("Start predicting with following params:",
               f"architecture = {architecture}",
               f"fold = {fold}",
@@ -213,7 +213,7 @@ class Model(object):
         label_map = pd.read_csv("../data/labels_map.csv")
         label_map.index = label_map['label_id']
         test_loader = get_test_loader(batch_size, test_augm)
-        with open(f"../results/{architecture}/sub_{fold}.csv", "w") as f:
+        with open(f"../results/{architecture}/{name}_{fold}.csv", "w") as f:
             f.write("_id,category_id\n")
             for images, product_ids in tqdm.tqdm(test_loader):
                 images = variable(images)
