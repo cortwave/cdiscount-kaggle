@@ -1,5 +1,4 @@
 import logging
-from threading import Lock
 from os import environ
 
 import numpy as np
@@ -10,11 +9,13 @@ from keras.applications.inception_v3 import InceptionV3, preprocess_input as pre
 from keras.applications.xception import Xception
 from keras.models import Model, load_model
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
-from keras.optimizers import Adam
+from keras.optimizers import Adam, Nadam
 from keras.layers import Dense
 from keras.utils import to_categorical
 from fire import Fire
 from imgaug import augmenters as iaa
+
+from keras_utils import threadsafe_generator
 
 logging.getLogger('tensorflow').setLevel(logging.WARNING)
 logging.basicConfig(level=logging.INFO,
@@ -22,25 +23,6 @@ logging.basicConfig(level=logging.INFO,
                     datefmt='%H:%M:%S', )
 logger = logging.getLogger(__name__)
 
-
-class threadsafe_iter:
-    def __init__(self, it):
-        self.it = it
-        self.lock = Lock()
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        with self.lock:
-            return next(self.it)
-
-
-def threadsafe_generator(f):
-    def g(*a, **kw):
-        return threadsafe_iter(f(*a, **kw))
-
-    return g
 
 
 class Dataset:
@@ -52,6 +34,8 @@ class Dataset:
             df = pd.concat(train_dfs)
         else:
             df = pd.read_csv(f"../data/fold_{n_fold}.csv")
+
+        df = df[df.image_id.str.endswith('_0')]
         labels_map = pd.read_csv("../data/labels_map.csv")
         labels_map = {k: v for k, v in zip(labels_map.category_id, labels_map.label_id)}
         self.num_classes = len(labels_map)
@@ -68,7 +52,8 @@ class Dataset:
                                         random_order=False)
 
     def _load(self, image):
-        img = imread(f"../data/images/train/{image}.jpg")
+        img = imread(f"/media/ssd/train/{image}.jpg")
+        # img = imread(f"../data/images/train/{image}.jpg")
         if self.shape != (180, 180):
             img = resize(img, self.shape)
         return img
@@ -96,8 +81,8 @@ def get_callbacks(model_name, fold):
     model_checkpoint = ModelCheckpoint(f'../results/{model_name}_{fold}.h5',
                                        monitor='val_loss',
                                        save_best_only=True, verbose=0)
-    es = EarlyStopping(monitor='val_loss', min_delta=0, patience=5, verbose=1, mode='auto')
-    reducer = ReduceLROnPlateau(min_lr=1e-6, verbose=1, factor=0.1, patience=2)
+    es = EarlyStopping(monitor='val_loss', min_delta=0, patience=10, verbose=1, mode='auto')
+    reducer = ReduceLROnPlateau(min_lr=1e-6, verbose=1, factor=0.1, patience=6)
     return [model_checkpoint, es, reducer]
 
 
@@ -124,7 +109,7 @@ def get_model(model_name, n_classes):
     for layer in base_model.layers:
         layer.trainable = False
 
-    model.compile(optimizer=Adam(clipvalue=2, clipnorm=1), loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer=Nadam(clipvalue=4, clipnorm=1), loss='categorical_crossentropy', metrics=['accuracy'])
     return model, preprocess, shape
 
 
@@ -175,7 +160,7 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1'):
     for layer in model.layers:
         layer.trainable = True
 
-    model.compile(optimizer=Adam(clipvalue=2, clipnorm=1), loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer=Nadam(clipvalue=4, clipnorm=1), loss='categorical_crossentropy', metrics=['accuracy'])
     model.fit_generator(train.get_batch(batch_size),
                         epochs=500,
                         steps_per_epoch=2000,

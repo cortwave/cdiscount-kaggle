@@ -14,8 +14,8 @@ from joblib import Parallel, delayed
 
 environ['CUDA_VISIBLE_DEVICES'] = '0'
 
-TRAIN_PATH = '/media/ssd/train/'
-RESULT_PATH = '/home/arseny/dev/cdiscount-kaggle/data/cosine.json'
+TRAIN_PATH = '/home/arseny/dev/cdiscount-kaggle/data/images/train/'
+RESULT_PATH = '/home/arseny/dev/cdiscount-kaggle/data/cosine_train.json'
 
 
 def parse(x):
@@ -44,7 +44,7 @@ def main():
                                    'distance': round(cosine(preds[i], preds[j]), 3)
                                    })
 
-                out.write(json.dumps(result))
+                out.write(json.dumps(result) + '\n')
 
 
 if __name__ == '__main__':
