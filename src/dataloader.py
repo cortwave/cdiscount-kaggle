@@ -53,6 +53,25 @@ class TestDataset(data.Dataset):
         return img, img_name.split("_")[0]
 
 
+class ValidDateset(data.Dataset):
+    def __init__(self, n_fold, transform=None):
+        df = pd.read_csv(f"../data/fold_{n_fold}.csv")
+        df = df[df.image_id.str.contains("_0")]
+        self.images = df.image_id.values
+        self.labels = df.category_id.values
+        self.transform = transform
+
+    def __len__(self):
+        return self.images.size
+
+    def __getitem__(self, idx):
+        X = load(self.images[idx])
+        if self.transform:
+            X = self.transform(X)
+        y = self.labels[idx]
+        return X, y
+
+
 def get_test_loader(batch_size, transform):
     test_dataset = TestDataset(transform)
     test_loader = data.DataLoader(test_dataset,
@@ -60,6 +79,15 @@ def get_test_loader(batch_size, transform):
                                   shuffle=False,
                                   num_workers=6)
     return test_loader
+
+
+def get_valid_loader(n_fold, n_folds, batch_size, transform):
+    dataset = ValidDataset(n_fold, transform)
+    dataset = data.DataLoader(dataset,
+                              batch_size=batch_size,
+                              shuffle=False,
+                              num_workers=6)
+    return dataset
 
 
 def get_loaders(batch_size,

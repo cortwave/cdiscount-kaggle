@@ -1,5 +1,5 @@
 from torchvision.models import resnet152, resnet50, resnet101, densenet121, densenet161, densenet169, densenet201
-from dataloader import get_loaders, get_test_loader
+from dataloader import get_loaders, get_test_loader, get_valid_loader
 from pathlib import Path
 import random
 import torch.nn as nn
@@ -216,6 +216,25 @@ class Model(object):
         with open(f"../results/{architecture}/{name}_{fold}.csv", "w") as f:
             f.write("_id,category_id\n")
             for images, product_ids in tqdm.tqdm(test_loader):
+                images = variable(images)
+                preds = model(images).data.cpu().numpy()
+                for pred, product_id in zip(preds, product_ids):
+                    label = np.argmax(pred, 0)
+                    cat_id = label_map.ix[label]['category_id']
+                    f.write(f"{product_id},{cat_id}\n")
+
+    def predict_validation(self, architecture, fold, tta, batch_size):
+        n_classes = 5270
+        model = self._get_model(num_classes=n_classes, architecture=architecture)
+        state = torch.load(f"../results/{architecture}/best-model_{fold}.pt")
+        model.load_state_dict(state['model'])
+        test_augm = valid_augm()
+        label_map = pd.read_csv("../data/labels_map.csv")
+        label_map.index = label_map['label_id']
+        loader = get_valid_loader(fold, 5, batch_size, test_augm)
+        with open(f"../results/{architecture}/validation_{fold}.csv", "w") as f:
+            f.write("_id,category_id\n")
+            for images, product_ids in tqdm.tqdm(loader):
                 images = variable(images)
                 preds = model(images).data.cpu().numpy()
                 for pred, product_id in zip(preds, product_ids):
