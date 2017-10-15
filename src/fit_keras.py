@@ -9,13 +9,13 @@ from keras.applications.inception_v3 import InceptionV3, preprocess_input as pre
 from keras.applications.xception import Xception
 from keras.models import Model, load_model
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
-from keras.optimizers import Adam, Nadam
+from keras.optimizers import Nadam
 from keras.layers import Dense
 from keras.utils import to_categorical
 from fire import Fire
 from imgaug import augmenters as iaa
 
-from keras_utils import threadsafe_generator
+from keras_utils import threadsafe_generator, NadamAccum
 
 logging.getLogger('tensorflow').setLevel(logging.WARNING)
 logging.basicConfig(level=logging.INFO,
@@ -47,6 +47,7 @@ class Dataset:
         self.aug = aug
         self.augmenter = iaa.Sequential([iaa.Fliplr(p=.25),
                                          iaa.Flipud(p=.25),
+                                         # iaa.Crop(px=(10, 10, 10, 10), keep_size=False)
                                          # iaa.GaussianBlur(sigma=(.05, .3))
                                          ],
                                         random_order=False)
@@ -109,7 +110,7 @@ def get_model(model_name, n_classes):
     for layer in base_model.layers:
         layer.trainable = False
 
-    model.compile(optimizer=Nadam(clipvalue=4, clipnorm=1), loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer=Nadam(clipvalue=3, clipnorm=1), loss='categorical_crossentropy', metrics=['accuracy'])
     return model, preprocess, shape
 
 
@@ -140,12 +141,13 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1'):
                   aug=False)
 
     fname = f'../results/{model_name}_{n_fold}.h5'
+    frozen_epochs = 1
 
     try:
         model = load_model(fname)
     except OSError:
         model.fit_generator(train.get_batch(batch_size),
-                            epochs=5,
+                            epochs=frozen_epochs,
                             steps_per_epoch=1000,
                             validation_data=val.get_batch(batch_size),
                             workers=8,
@@ -160,7 +162,7 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1'):
     for layer in model.layers:
         layer.trainable = True
 
-    model.compile(optimizer=Nadam(clipvalue=4, clipnorm=1), loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer=AdamAccum(clipvalue=4), loss='categorical_crossentropy', metrics=['accuracy'])
     model.fit_generator(train.get_batch(batch_size),
                         epochs=500,
                         steps_per_epoch=2000,
@@ -169,7 +171,7 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1'):
                         use_multiprocessing=False,
                         validation_steps=100,
                         callbacks=get_callbacks(model_name, n_fold),
-                        initial_epoch=7,
+                        initial_epoch=frozen_epochs,
                         )
 
 
