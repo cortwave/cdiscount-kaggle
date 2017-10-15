@@ -53,7 +53,7 @@ class TestDataset(data.Dataset):
         return img, img_name.split("_")[0]
 
 
-class ValidDateset(data.Dataset):
+class ValidDataset(data.Dataset):
     def __init__(self, n_fold, transform=None):
         df = pd.read_csv(f"../data/fold_{n_fold}.csv")
         df = df[df.image_id.str.contains("_0")]
