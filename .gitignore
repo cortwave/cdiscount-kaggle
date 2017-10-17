@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 .idea
 *.pt
+src/dpn/pretrained
 
 /results
 # C extensions

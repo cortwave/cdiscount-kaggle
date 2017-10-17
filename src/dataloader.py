@@ -34,7 +34,7 @@ class Dataset(data.Dataset):
         X = load(self.images[idx])
         if self.transform:
             X = self.transform(X)
-        y = self.labels_map.ix[self.labels[idx]].label_id
+        y = self.labels_map.loc[self.labels[idx]].label_id
         return X, y
 
 

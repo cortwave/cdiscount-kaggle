@@ -1,4 +1,4 @@
-from torchvision.models import resnet152, resnet50, resnet101, densenet121, densenet161, densenet169, densenet201
+from torchvision.models import squeezenet1_1, resnet152, resnet50, resnet101, densenet121, densenet161, densenet169, densenet201
 from dataloader import get_loaders, get_test_loader, get_valid_loader
 from pathlib import Path
 import random
@@ -6,7 +6,7 @@ import torch.nn as nn
 import tqdm
 from itertools import islice
 from torch.nn import CrossEntropyLoss
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 import numpy as np
 import torch
 from datetime import datetime
@@ -17,6 +17,8 @@ from pt_util import variable, long_tensor
 from metrics import accuracy
 from fire import Fire
 import pandas as pd
+from dpn import model_factory
+
 
 
 def validate(model, criterion, valid_loader, validation_size, batch_size, iter_size):
@@ -58,7 +60,7 @@ def write_event(log, step: int, **data):
 
 
 class Model(object):
-    def train(self, architecture, fold, lr, batch_size, epochs, epoch_size, validation_size, iter_size):
+    def train(self, architecture, fold, lr, batch_size, epochs, epoch_size, validation_size, iter_size, optim="adam"):
         print("Start training with following params:",
               f"architecture = {architecture}",
               f"fold = {fold}",
@@ -67,7 +69,8 @@ class Model(object):
               f"epochs = {epochs}",
               f"epoch_size = {epoch_size}",
               f"validation_size = {validation_size}",
-              f"iter_size = {iter_size}")
+              f"iter_size = {iter_size}",
+              f"optim = {optim}")
 
         train_loader, valid_loader, num_classes = get_loaders(batch_size,
                                                               train_transform=train_augm(),
@@ -80,6 +83,7 @@ class Model(object):
         self.model = model
         self.root = Path(f"../results/{architecture}")
         self.fold = fold
+        self.optim = optim
         train_kwargs = dict(
             args=dict(iter_size=iter_size, n_epochs=epochs,
                       batch_size=batch_size, epoch_size=epoch_size),
@@ -93,7 +97,12 @@ class Model(object):
         self._train(**train_kwargs)
 
     def _init_optimizer(self):
-        return Adam(self.model.parameters(), lr=self.lr)
+        if self.optim == "adam":
+            return Adam(self.model.parameters(), lr=self.lr, )
+        elif self.optim == "sgd":
+            return SGD(self.model.parameters(), lr=self.lr, momentum=0.1, weight_decay=0.0001)
+        else:
+            raise Exception(f"Unknown optimizer {self.optim}")
 
     def _init_files(self):
         if not self.root.exists():
@@ -267,6 +276,28 @@ class Model(object):
             else:
                 raise Exception(f'Unknown architecture: {architecture}')
             model.classifier = nn.Linear(model.classifier.in_features, num_classes).cuda()
+        elif "squeezenet" in architecture:
+            if architecture == "squeezenet1_1":
+                model = squeezenet1_1(pretrained=True).cuda()
+            else:
+                raise Exception(f'Unknown architecture: {architecture}')
+            final_conv = nn.Conv2d(512, num_classes, kernel_size=1)
+            model.classifier = nn.Sequential(
+                nn.Dropout(p=0.5),
+                final_conv,
+                nn.ReLU(inplace=True),
+                nn.AdaptiveAvgPool2d(1)
+            )
+            model.num_classes = num_classes
+        elif "dpn" in architecture:
+            if architecture == "dpn68":
+                model = model_factory.create_model(architecture,
+                                                   num_classes=1000,
+                                                   pretrained=True,
+                                                   test_time_pool=False)
+                model.classifier = nn.Conv2d(model.in_chs, num_classes, kernel_size=1, bias=True)
+            else:
+                raise Exception(f'Unknown architecture: {architecture}')
         else:
             raise Exception(f'Unknown architectire: {architecture}')
         return nn.DataParallel(model).cuda()
