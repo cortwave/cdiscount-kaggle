@@ -58,7 +58,7 @@ class ValidDataset(data.Dataset):
         df = pd.read_csv(f"../data/fold_{n_fold}.csv")
         df = df[df.image_id.str.contains("_0")]
         self.images = df.image_id.values
-        self.labels = df.category_id.values
+        self.product_ids = df.product_id.values
         self.transform = transform
 
     def __len__(self):
@@ -68,7 +68,7 @@ class ValidDataset(data.Dataset):
         X = load(self.images[idx])
         if self.transform:
             X = self.transform(X)
-        y = self.labels[idx]
+        y = self.product_ids[idx]
         return X, y
 
 
@@ -81,7 +81,7 @@ def get_test_loader(batch_size, transform):
     return test_loader
 
 
-def get_valid_loader(n_fold, n_folds, batch_size, transform):
+def get_valid_loader(n_fold, batch_size, transform):
     dataset = ValidDataset(n_fold, transform)
     dataset = data.DataLoader(dataset,
                               batch_size=batch_size,

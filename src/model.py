@@ -1,4 +1,3 @@
-from torchvision.models import squeezenet1_1, resnet152, resnet50, resnet101, densenet121, densenet161, densenet169, densenet201
 from dataloader import get_loaders, get_test_loader, get_valid_loader
 from pathlib import Path
 import random
@@ -17,8 +16,7 @@ from pt_util import variable, long_tensor
 from metrics import accuracy
 from fire import Fire
 import pandas as pd
-from dpn import model_factory
-
+from model_factory import get_model
 
 
 def validate(model, criterion, valid_loader, validation_size, batch_size, iter_size):
@@ -60,7 +58,7 @@ def write_event(log, step: int, **data):
 
 
 class Model(object):
-    def train(self, architecture, fold, lr, batch_size, epochs, epoch_size, validation_size, iter_size, optim="adam"):
+    def train(self, architecture, fold, lr, batch_size, epochs, epoch_size, validation_size, iter_size, patience=4, optim="adam"):
         print("Start training with following params:",
               f"architecture = {architecture}",
               f"fold = {fold}",
@@ -70,13 +68,14 @@ class Model(object):
               f"epoch_size = {epoch_size}",
               f"validation_size = {validation_size}",
               f"iter_size = {iter_size}",
-              f"optim = {optim}")
+              f"optim = {optim}",
+              f"patience = {patience}")
 
         train_loader, valid_loader, num_classes = get_loaders(batch_size,
                                                               train_transform=train_augm(),
                                                               valid_transform=valid_augm(),
                                                               n_fold=fold)
-        model = self._get_model(num_classes, architecture)
+        model = get_model(num_classes, architecture)
         criterion = CrossEntropyLoss(size_average=False)
 
         self.lr = lr
@@ -92,7 +91,7 @@ class Model(object):
             train_loader=train_loader,
             valid_loader=valid_loader,
             validation_size=validation_size,
-            patience=4
+            patience=patience
         )
         self._train(**train_kwargs)
 
@@ -215,7 +214,7 @@ class Model(object):
               f"fold = {fold}",
               f"tta = {tta}")
         n_classes = 5270
-        model = self._get_model(num_classes=n_classes, architecture=architecture)
+        model = get_model(num_classes=n_classes, architecture=architecture)
         state = torch.load(f"../results/{architecture}/best-model_{fold}.pt")
         model.load_state_dict(state['model'])
         test_augm = valid_augm()
@@ -234,13 +233,13 @@ class Model(object):
 
     def predict_validation(self, architecture, fold, tta, batch_size):
         n_classes = 5270
-        model = self._get_model(num_classes=n_classes, architecture=architecture)
+        model = get_model(num_classes=n_classes, architecture=architecture)
         state = torch.load(f"../results/{architecture}/best-model_{fold}.pt")
         model.load_state_dict(state['model'])
         test_augm = valid_augm()
         label_map = pd.read_csv("../data/labels_map.csv")
         label_map.index = label_map['label_id']
-        loader = get_valid_loader(fold, 5, batch_size, test_augm)
+        loader = get_valid_loader(fold, batch_size, test_augm)
         with open(f"../results/{architecture}/validation_{fold}.csv", "w") as f:
             f.write("_id,category_id\n")
             for images, product_ids in tqdm.tqdm(loader):
@@ -250,57 +249,6 @@ class Model(object):
                     label = np.argmax(pred, 0)
                     cat_id = label_map.ix[label]['category_id']
                     f.write(f"{product_id},{cat_id}\n")
-
-    @staticmethod
-    def _get_model(num_classes, architecture='resnet50'):
-        if "resnet" in architecture:
-            if architecture == 'resnet50':
-                model = resnet50(pretrained=True).cuda()
-            elif architecture == 'resnet101':
-                model = resnet101(pretrained=True).cuda()
-            elif architecture == 'resnet152':
-                model = resnet152(pretrained=True).cuda()
-            else:
-                raise Exception(f'Unknown architecture: {architecture}')
-            model.fc = nn.Linear(model.fc.in_features, num_classes).cuda()
-            model.avgpool = nn.AdaptiveAvgPool2d(1)
-        elif "densenet" in architecture:
-            if architecture == 'densenet121':
-                model = densenet121(pretrained=True).cuda()
-            elif architecture == "densenet161":
-                model = densenet161(pretrained=True).cuda()
-            elif architecture == "densenet169":
-                model = densenet169(pretrained=True).cuda()
-            elif architecture == "densenet201":
-                model = densenet201(pretrained=True).cuda()
-            else:
-                raise Exception(f'Unknown architecture: {architecture}')
-            model.classifier = nn.Linear(model.classifier.in_features, num_classes).cuda()
-        elif "squeezenet" in architecture:
-            if architecture == "squeezenet1_1":
-                model = squeezenet1_1(pretrained=True).cuda()
-            else:
-                raise Exception(f'Unknown architecture: {architecture}')
-            final_conv = nn.Conv2d(512, num_classes, kernel_size=1)
-            model.classifier = nn.Sequential(
-                nn.Dropout(p=0.5),
-                final_conv,
-                nn.ReLU(inplace=True),
-                nn.AdaptiveAvgPool2d(1)
-            )
-            model.num_classes = num_classes
-        elif "dpn" in architecture:
-            if architecture == "dpn68":
-                model = model_factory.create_model(architecture,
-                                                   num_classes=1000,
-                                                   pretrained=True,
-                                                   test_time_pool=False)
-                model.classifier = nn.Conv2d(model.in_chs, num_classes, kernel_size=1, bias=True)
-            else:
-                raise Exception(f'Unknown architecture: {architecture}')
-        else:
-            raise Exception(f'Unknown architectire: {architecture}')
-        return nn.DataParallel(model).cuda()
 
 
 if __name__ == '__main__':
