@@ -1,5 +1,6 @@
 import logging
 from os import environ
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -10,12 +11,12 @@ from keras.applications.xception import Xception
 from keras.models import Model, load_model
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
 from keras.optimizers import Nadam
-from keras.layers import Dense
+from keras.layers import Dense, Concatenate, Input
 from keras.utils import to_categorical
 from fire import Fire
 from imgaug import augmenters as iaa
 
-from keras_utils import threadsafe_generator, NadamAccum
+from keras_utils import threadsafe_generator, AdamAccum
 
 logging.getLogger('tensorflow').setLevel(logging.WARNING)
 logging.basicConfig(level=logging.INFO,
@@ -35,6 +36,7 @@ class Dataset:
         else:
             df = pd.read_csv(f"../data/fold_{n_fold}.csv")
 
+        self.counter = self.count_imgs_per_item(df)
         df = df[df.image_id.str.endswith('_0')]
         labels_map = pd.read_csv("../data/labels_map.csv")
         labels_map = {k: v for k, v in zip(labels_map.category_id, labels_map.label_id)}
@@ -52,12 +54,18 @@ class Dataset:
                                          ],
                                         random_order=False)
 
+    @staticmethod
+    def count_imgs_per_item(df):
+        images = [x.split('_')[0] for x in df.image_id.values]
+        return Counter(images)
+
     def _load(self, image):
         img = imread(f"/media/ssd/train/{image}.jpg")
         # img = imread(f"../data/images/train/{image}.jpg")
+        cnt = self.counter[image.split('_')[0]]
         if self.shape != (180, 180):
             img = resize(img, self.shape)
-        return img
+        return img, cnt
 
     @threadsafe_generator
     def get_batch(self, batch_size):
@@ -67,15 +75,17 @@ class Dataset:
             yield self._get_images(idx)
 
     def _get_images(self, idx_batch):
-        X = np.array([self._load(self.images[idx]) for idx in idx_batch]).astype('float32')
+        x_img, x_cnt = zip(*[self._load(self.images[idx]) for idx in idx_batch])
+        x_img = np.array(x_img).astype('float32')
+        x_cnt = np.array(x_cnt)
 
         if self.aug:
-            X = self.augmenter.augment_images(X)
+            x_img = self.augmenter.augment_images(x_img)
         if self.transform:
-            X = self.transform(X)
+            x_img = self.transform(x_img)
         y = to_categorical(self.labels[idx_batch],
                            num_classes=self.num_classes)
-        return X, y
+        return [x_img, x_cnt], y
 
 
 def get_callbacks(model_name, fold):
@@ -104,8 +114,12 @@ def get_model(model_name, n_classes):
         raise ValueError('Network name is undefined')
 
     x = base_model.output
+    cnt_input = Input(shape=(1,))
+    cnt = Dense(1, activation='relu')(cnt_input)
+    x = Concatenate()([cnt, x])
+    x = Dense(n_classes, activation='relu')(x)
     predictions = Dense(n_classes, activation='sigmoid')(x)
-    model = Model(inputs=base_model.input, outputs=predictions)
+    model = Model(inputs=[base_model.input, cnt_input], outputs=predictions)
 
     for layer in base_model.layers:
         layer.trainable = False
