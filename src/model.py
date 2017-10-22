@@ -99,7 +99,7 @@ class Model(object):
         if self.optim == "adam":
             return Adam(self.model.parameters(), lr=self.lr, )
         elif self.optim == "sgd":
-            return SGD(self.model.parameters(), lr=self.lr, momentum=0.1, weight_decay=0.0001)
+            return SGD(self.model.parameters(), lr=self.lr, momentum=0.9)
         else:
             raise Exception(f"Unknown optimizer {self.optim}")
 
@@ -197,7 +197,7 @@ class Model(object):
                     shutil.copy(str(self.model_path), str(self.best_model_path))
                 elif (patience and epoch - lr_reset_epoch > patience and
                               min(valid_losses[-patience:]) > self.best_valid_loss):
-                    lr /= 5
+                    lr /= 1.1
                     lr_reset_epoch = epoch
                     optimizer = self._init_optimizer()
             except KeyboardInterrupt:

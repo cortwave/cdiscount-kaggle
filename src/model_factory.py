@@ -2,11 +2,13 @@ from torchvision.models import squeezenet1_1, resnet152, resnet34, resnet50, res
 from se_net.se_resnet import se_resnet18, se_resnet34, se_resnet50, se_resnet101, se_resnet152
 import torch.nn as nn
 from dpn import model_factory as dpn_factory
-
+from se_net.se_inception import SEInception3
 
 def get_model(num_classes, architecture):
     model = None
-    if "seresnet" in architecture:
+    if "seinception" in architecture:
+        model = SEInception3(num_classes=num_classes)
+    elif "seresnet" in architecture:
         if architecture == 'seresnet18':
             model = se_resnet18(num_classes).cuda()
         if architecture == 'seresnet34':
