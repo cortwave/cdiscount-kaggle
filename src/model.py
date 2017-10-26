@@ -17,6 +17,7 @@ from metrics import accuracy
 from fire import Fire
 import pandas as pd
 from model_factory import get_model
+from torchnet.logger import VisdomPlotLogger, VisdomLogger
 
 
 def validate(model, criterion, valid_loader, validation_size, batch_size, iter_size):
@@ -49,16 +50,9 @@ def validate(model, criterion, valid_loader, validation_size, batch_size, iter_s
     return {'valid_loss': valid_loss, 'valid_acc': valid_acc}
 
 
-def write_event(log, step: int, **data):
-    data['step'] = step
-    data['dt'] = datetime.now().isoformat()
-    log.write(json.dumps(data, sort_keys=True))
-    log.write('\n')
-    log.flush()
-
-
 class Model(object):
-    def train(self, architecture, fold, lr, batch_size, epochs, epoch_size, validation_size, iter_size, patience=4, optim="adam"):
+    def train(self, architecture, fold, lr, batch_size, epochs, epoch_size, validation_size, iter_size, patience=4,
+              optim="adam"):
         print("Start training with following params:",
               f"architecture = {architecture}",
               f"fold = {fold}",
@@ -83,6 +77,10 @@ class Model(object):
         self.root = Path(f"../results/{architecture}")
         self.fold = fold
         self.optim = optim
+        self.train_loss_logger = VisdomPlotLogger('line', opts={'title': 'Train Loss'})
+        self.lr_logger = VisdomPlotLogger('line', opts={'title': 'Train Learning Rate'})
+        self.test_loss_logger = VisdomPlotLogger('line', opts={'title': 'Test Loss'})
+        self.test_accuracy_logger = VisdomPlotLogger('line', opts={'title': 'Test Accuracy'})
         train_kwargs = dict(
             args=dict(iter_size=iter_size, n_epochs=epochs,
                       batch_size=batch_size, epoch_size=epoch_size),
@@ -99,7 +97,7 @@ class Model(object):
         if self.optim == "adam":
             return Adam(self.model.parameters(), lr=self.lr, )
         elif self.optim == "sgd":
-            return SGD(self.model.parameters(), lr=self.lr, momentum=0.1, weight_decay=0.0001)
+            return SGD(self.model.parameters(), lr=self.lr, momentum=0.9)
         else:
             raise Exception(f"Unknown optimizer {self.optim}")
 
@@ -159,11 +157,14 @@ class Model(object):
             tq.set_description('Epoch {}, lr {}'.format(epoch, lr))
             losses = []
             tl = train_loader
+            epoch_loss = 0
             if args['epoch_size']:
                 tl = islice(tl, args['epoch_size'] // batch_size)
             try:
                 mean_loss = 0
+                batches_count = 0
                 for i, (inputs, targets) in enumerate(tl):
+                    batches_count += 1
                     inputs, targets = variable(inputs), variable(targets)
                     targets = long_tensor(targets)
                     inputs_chunks = inputs.chunk(iter_size)
@@ -180,24 +181,27 @@ class Model(object):
                     optimizer.step()
                     self.step += 1
                     tq.update(batch_size)
+                    epoch_loss += iter_loss
                     losses.append(iter_loss)
                     mean_loss = np.mean(losses[-report_each:])
                     tq.set_postfix(loss='{:.3f}'.format(mean_loss))
                     if i and i % report_each == 0:
-                        write_event(self.log, self.step, loss=mean_loss)
-                write_event(self.log, self.step, loss=mean_loss)
+                        self._write_event(loss=mean_loss)
+                epoch_loss /= batches_count
+                self._write_event(loss=mean_loss)
                 tq.close()
                 self._save_model(epoch + 1)
                 valid_metrics = validate(model, criterion, valid_loader, validation_size, batch_size, iter_size)
-                write_event(self.log, self.step, **valid_metrics)
+                self._write_event(**valid_metrics)
+                self._log_visdom(epoch, valid_metrics, epoch_loss)
                 valid_loss = valid_metrics['valid_loss']
                 valid_losses.append(valid_loss)
                 if valid_loss < self.best_valid_loss:
+                    print("Best validation loss improved from {} to {}".format(self.best_valid_loss, valid_loss))
                     self.best_valid_loss = valid_loss
                     shutil.copy(str(self.model_path), str(self.best_model_path))
-                elif (patience and epoch - lr_reset_epoch > patience and
-                              min(valid_losses[-patience:]) > self.best_valid_loss):
-                    lr /= 5
+                elif patience and epoch - lr_reset_epoch > patience and min(valid_losses[-patience:]) > self.best_valid_loss:
+                    lr /= 1.1
                     lr_reset_epoch = epoch
                     optimizer = self._init_optimizer()
             except KeyboardInterrupt:
@@ -207,6 +211,23 @@ class Model(object):
                 print('done.')
                 break
         return
+
+    def _log_visdom(self, epoch, valid_metrics, train_loss):
+        try:
+            self.lr_logger.log(epoch, self.lr)
+            self.train_loss_logger.log(epoch, train_loss)
+            self.test_loss_logger.log(epoch, valid_metrics['valid_loss'])
+            self.test_accuracy_logger.log(epoch, valid_metrics['valid_acc'])
+        except Exception:
+            pass
+
+
+    def _write_event(self, **data):
+        data['step'] = self.step
+        data['dt'] = datetime.now().isoformat()
+        self.log.write(json.dumps(data, sort_keys=True))
+        self.log.write('\n')
+        self.log.flush()
 
     def predict(self, architecture, fold, tta, batch_size, name="sub"):
         print("Start predicting with following params:",
