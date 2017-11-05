@@ -3,13 +3,15 @@ from os import environ
 
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 from cv2 import imread, resize
 from keras.applications.resnet50 import ResNet50, preprocess_input
 from keras.applications.inception_v3 import InceptionV3, preprocess_input as preprocess_xcept
 from keras.applications.xception import Xception
+from keras.applications.inception_resnet_v2 import InceptionResNetV2
 from keras.models import Model, load_model
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
-from keras.optimizers import Nadam
+from keras.optimizers import Nadam, SGD
 from keras.layers import Dense
 from keras.utils import to_categorical
 from fire import Fire
@@ -45,7 +47,7 @@ class Dataset:
         self.aug = aug
         self.augmenter = iaa.Sequential([iaa.Fliplr(p=.25),
                                          iaa.Flipud(p=.25),
-                                         # iaa.Crop(px=(10, 10, 10, 10), keep_size=False)
+                                         iaa.Crop(px=((0, 20), (0, 20), (0, 20), (0, 20)), keep_size=True)
                                          # iaa.GaussianBlur(sigma=(.05, .3))
                                          ],
                                         random_order=False)
@@ -98,6 +100,10 @@ def get_model(model_name, n_classes):
         base_model = Xception(include_top=False, input_shape=(180, 180, 3), pooling='avg')
         preprocess = preprocess_xcept
         shape = (180, 180)
+    elif model_name == 'incres':
+        base_model = InceptionResNetV2(include_top=False, input_shape=(150, 150, 3), pooling='avg')
+        preprocess = preprocess_input
+        shape = (150, 150)
     else:
         raise ValueError('Network name is undefined')
 
@@ -185,7 +191,8 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1', use_hard_samples=Fa
     for layer in model.layers:
         layer.trainable = True
 
-    model.compile(optimizer=AdamAccum(clipvalue=4), loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer=SGD(clipvalue=4, momentum=.9, nesterov=True), loss='categorical_crossentropy',
+                  metrics=['accuracy'])
     model.fit_generator(train.get_batch(batch_size),
                         epochs=50,
                         steps_per_epoch=2000,
