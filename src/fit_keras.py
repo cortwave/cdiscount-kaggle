@@ -3,26 +3,26 @@ from os import environ
 
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 from cv2 import imread, resize
 from keras.applications.resnet50 import ResNet50, preprocess_input
 from keras.applications.inception_v3 import InceptionV3, preprocess_input as preprocess_xcept
 from keras.applications.xception import Xception
+from keras.applications.inception_resnet_v2 import InceptionResNetV2
 from keras.models import Model, load_model
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
-from keras.optimizers import Nadam
+from keras.optimizers import Nadam, SGD
 from keras.layers import Dense
 from keras.utils import to_categorical
 from fire import Fire
 from imgaug import augmenters as iaa
-
-from keras_utils import threadsafe_generator, NadamAccum
+from keras_utils import threadsafe_generator, AdamAccum
 
 logging.getLogger('tensorflow').setLevel(logging.WARNING)
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s',
                     datefmt='%H:%M:%S', )
 logger = logging.getLogger(__name__)
-
 
 
 class Dataset:
@@ -47,7 +47,7 @@ class Dataset:
         self.aug = aug
         self.augmenter = iaa.Sequential([iaa.Fliplr(p=.25),
                                          iaa.Flipud(p=.25),
-                                         # iaa.Crop(px=(10, 10, 10, 10), keep_size=False)
+                                         iaa.Crop(px=((0, 20), (0, 20), (0, 20), (0, 20)), keep_size=True)
                                          # iaa.GaussianBlur(sigma=(.05, .3))
                                          ],
                                         random_order=False)
@@ -100,11 +100,15 @@ def get_model(model_name, n_classes):
         base_model = Xception(include_top=False, input_shape=(180, 180, 3), pooling='avg')
         preprocess = preprocess_xcept
         shape = (180, 180)
+    elif model_name == 'incres':
+        base_model = InceptionResNetV2(include_top=False, input_shape=(150, 150, 3), pooling='avg')
+        preprocess = preprocess_input
+        shape = (150, 150)
     else:
         raise ValueError('Network name is undefined')
 
     x = base_model.output
-    predictions = Dense(n_classes, activation='sigmoid')(x)
+    predictions = Dense(n_classes, activation='softmax')(x)
     model = Model(inputs=base_model.input, outputs=predictions)
 
     for layer in base_model.layers:
@@ -114,7 +118,32 @@ def get_model(model_name, n_classes):
     return model, preprocess, shape
 
 
-def fit_model(model_name, batch_size=64, n_fold=0, cuda='1'):
+def hard_sampler(model, datagen, batch_size):
+    logger.info('Sampler started')
+    while True:
+        samples, targets = [], []
+        while len(samples) < batch_size:
+            x_data, y_data = next(datagen)
+            preds = model.predict(x_data)
+            errors = np.abs(preds - y_data).max(axis=-1) > .99
+            samples += x_data[errors].tolist()
+            targets += y_data[errors].tolist()
+
+        regular_samples = batch_size * 2 - len(samples)
+        x_data, y_data = next(datagen)
+        samples += x_data[:regular_samples].tolist()
+        targets += y_data[:regular_samples].tolist()
+
+        samples, targets = map(np.array, (samples, targets))
+
+        idx = np.arange(batch_size * 2)
+        np.random.shuffle(idx)
+        batch1, batch2 = np.split(idx, 2)
+        yield samples[batch1], targets[batch1]
+        yield samples[batch2], targets[batch2]
+
+
+def fit_model(model_name, batch_size=64, n_fold=0, cuda='1', use_hard_samples=False):
     environ['CUDA_VISIBLE_DEVICES'] = str(cuda)
 
     train = Dataset(n_fold=n_fold,
@@ -144,7 +173,7 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1'):
     frozen_epochs = 1
 
     try:
-        model = load_model(fname)
+        model = load_model(fname, custom_objects={'AdamAccum': AdamAccum})
     except OSError:
         model.fit_generator(train.get_batch(batch_size),
                             epochs=frozen_epochs,
@@ -162,9 +191,10 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1'):
     for layer in model.layers:
         layer.trainable = True
 
-    model.compile(optimizer=AdamAccum(clipvalue=4), loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer=SGD(clipvalue=4, momentum=.9, nesterov=True), loss='categorical_crossentropy',
+                  metrics=['accuracy'])
     model.fit_generator(train.get_batch(batch_size),
-                        epochs=500,
+                        epochs=50,
                         steps_per_epoch=2000,
                         validation_data=val.get_batch(batch_size),
                         workers=8,
@@ -173,6 +203,23 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1'):
                         callbacks=get_callbacks(model_name, n_fold),
                         initial_epoch=frozen_epochs,
                         )
+
+    if use_hard_samples:
+        x, y = next(train.get_batch(batch_size))
+        model.predict(x)
+        # for some mysterious reasons it fails without this run if the model has just been loaded
+        # ValueError: Tensor Tensor("dense_1_1/Softmax:0", shape=(?, 5270), dtype=float32) is not an element of this graph.
+
+        logger.info('Switching to hard sampler')
+        model.fit_generator(hard_sampler(model, train.get_batch(batch_size), batch_size=batch_size),
+                            epochs=500,
+                            steps_per_epoch=2000,
+                            validation_data=val.get_batch(batch_size),
+                            workers=1,
+                            use_multiprocessing=False,
+                            validation_steps=100,
+                            initial_epoch=frozen_epochs + 50,
+                            )
 
 
 if __name__ == '__main__':
