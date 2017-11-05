@@ -1,4 +1,4 @@
 #!/bin/bash
-for i in 0;
-  do python3 model.py train --architecture=resnet101 --fold=$i --lr=0.001 --batch-size=64 --iter-size=1 --epochs=200 --epoch-size=200000 --validation-size=100000;
+for i in 1;
+  do python3 model.py train --architecture=resnet101 --fold=$i --lr=0.01 --batch-size=512 --iter-size=8 --epochs=1000 --epoch-size=400000 --validation-size=300000 --optim=sgd;
 done
