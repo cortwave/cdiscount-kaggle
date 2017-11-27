@@ -3,7 +3,6 @@ from os import environ
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 from cv2 import imread, resize
 from keras.applications.resnet50 import ResNet50, preprocess_input
 from keras.applications.inception_v3 import InceptionV3, preprocess_input as preprocess_xcept
@@ -82,7 +81,7 @@ def get_callbacks(model_name, fold):
     model_checkpoint = ModelCheckpoint(f'../results/{model_name}_{fold}.h5',
                                        monitor='val_loss',
                                        save_best_only=True, verbose=0)
-    es = EarlyStopping(monitor='val_loss', min_delta=0, patience=10, verbose=1, mode='auto')
+    es = EarlyStopping(monitor='val_loss', min_delta=0, patience=12, verbose=1, mode='auto')
     reducer = ReduceLROnPlateau(min_lr=1e-6, verbose=1, factor=0.1, patience=6)
     return [model_checkpoint, es, reducer]
 
@@ -144,7 +143,7 @@ def hard_sampler(model, datagen, batch_size):
 
 
 def fit_model(model_name, batch_size=64, n_fold=0, cuda='1', use_hard_samples=False):
-    environ['CUDA_VISIBLE_DEVICES'] = str(cuda)
+    # environ['CUDA_VISIBLE_DEVICES'] = str(cuda)
 
     train = Dataset(n_fold=n_fold,
                     n_folds=5,
@@ -173,7 +172,7 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1', use_hard_samples=Fa
     frozen_epochs = 1
 
     try:
-        model = load_model(fname, custom_objects={'AdamAccum': AdamAccum})
+        model = load_model(fname, compile=False)
     except OSError:
         model.fit_generator(train.get_batch(batch_size),
                             epochs=frozen_epochs,
@@ -194,7 +193,7 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1', use_hard_samples=Fa
     model.compile(optimizer=SGD(clipvalue=4, momentum=.9, nesterov=True), loss='categorical_crossentropy',
                   metrics=['accuracy'])
     model.fit_generator(train.get_batch(batch_size),
-                        epochs=50,
+                        epochs=500,
                         steps_per_epoch=2000,
                         validation_data=val.get_batch(batch_size),
                         workers=8,
