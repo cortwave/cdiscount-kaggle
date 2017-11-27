@@ -1,4 +1,5 @@
 import torch.utils.data as data
+from torchvision.transforms import ToTensor
 import pandas as pd
 from PIL import Image
 import os
@@ -9,15 +10,21 @@ def load(image, train=True):
     img = Image.open(f"../data/images/{folder}/{image}.jpg")
     return img
 
+
 class Dataset(data.Dataset):
     def __init__(self, n_fold, n_folds, transform=None, train=True):
+        valid_fold = pd.read_csv(f"../data/fold_{n_fold}.csv")
+        take_every_nth = 3
+        train_part_of_valid = valid_fold[valid_fold.index % take_every_nth != 0]
+        valid_part_of_valid = valid_fold[valid_fold.index % take_every_nth == 0]
         if train:
             folds = list(range(n_folds))
             folds.remove(n_fold)
             train_dfs = [pd.read_csv(f"../data/fold_{i}.csv") for i in folds]
+            train_dfs.append(train_part_of_valid)
             df = pd.concat(train_dfs)
         else:
-            df = pd.read_csv(f"../data/fold_{n_fold}.csv")
+            df = valid_part_of_valid
         labels_map = pd.read_csv("../data/labels_map.csv")
         labels_map.index = labels_map.category_id
         df = df[df.image_id.str.contains("_0")]
@@ -31,15 +38,15 @@ class Dataset(data.Dataset):
         return self.images.size
 
     def __getitem__(self, idx):
-        X = load(self.images[idx])
+        x = load(self.images[idx])
         if self.transform:
-            X = self.transform(X)
+            x = self.transform(x)
         y = self.labels_map.loc[self.labels[idx]].label_id
-        return X, y
+        return x, y
 
 
 class TestDataset(data.Dataset):
-    def __init__(self, transform):
+    def __init__(self, transform=None):
         self.images = list(filter(lambda x: "_0" in x, os.listdir("../data/images/test")))
         self.transform = transform
 
@@ -49,7 +56,10 @@ class TestDataset(data.Dataset):
     def __getitem__(self, idx):
         img_name = self.images[idx].split(".")[0]
         img = load(img_name, train=False)
-        img = self.transform(img)
+        if self.transform:
+            img = self.transform(img)
+        else:
+            img = ToTensor()(img)
         return img, img_name.split("_")[0]
 
 
@@ -65,14 +75,14 @@ class ValidDataset(data.Dataset):
         return self.images.size
 
     def __getitem__(self, idx):
-        X = load(self.images[idx])
+        x = load(self.images[idx])
         if self.transform:
-            X = self.transform(X)
+            x = self.transform(x)
         y = self.product_ids[idx]
-        return X, y
+        return x, y
 
 
-def get_test_loader(batch_size, transform):
+def get_test_loader(batch_size, transform=None):
     test_dataset = TestDataset(transform)
     test_loader = data.DataLoader(test_dataset,
                                   batch_size=batch_size,

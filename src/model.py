@@ -1,4 +1,4 @@
-from dataloader import get_loaders, get_test_loader, get_valid_loader
+from dataloader import get_loaders, get_test_loader, get_valid_loader, TestDataset
 from pathlib import Path
 import random
 import torch.nn as nn
@@ -17,7 +17,7 @@ from metrics import accuracy
 from fire import Fire
 import pandas as pd
 from model_factory import get_model
-from torchnet.logger import VisdomPlotLogger, VisdomLogger
+from torchnet.logger import VisdomPlotLogger
 
 
 def validate(model, criterion, valid_loader, validation_size, batch_size, iter_size):
@@ -52,7 +52,7 @@ def validate(model, criterion, valid_loader, validation_size, batch_size, iter_s
 
 class Model(object):
     def train(self, architecture, fold, lr, batch_size, epochs, epoch_size, validation_size, iter_size, patience=4,
-              optim="adam"):
+              optim="adam", ignore_prev_best_loss=False):
         print("Start training with following params:",
               f"architecture = {architecture}",
               f"fold = {fold}",
@@ -72,6 +72,7 @@ class Model(object):
         model = get_model(num_classes, architecture)
         criterion = CrossEntropyLoss(size_average=False)
 
+        self.ignore_prev_best_loss = ignore_prev_best_loss
         self.lr = lr
         self.model = model
         self.root = Path(f"../results/{architecture}")
@@ -113,7 +114,10 @@ class Model(object):
             state = torch.load(str(self.model_path))
             self.epoch = state['epoch']
             self.step = state['step']
-            self.best_valid_loss = state['best_valid_loss']
+            if self.ignore_prev_best_loss:
+                self.best_valid_loss = float('inf')
+            else:
+                self.best_valid_loss = state['best_valid_loss']
             self.model.load_state_dict(state['model'])
             print('Restored model, epoch {}, step {:,}'.format(self.epoch, self.step))
         else:
@@ -193,7 +197,10 @@ class Model(object):
                 self._save_model(epoch + 1)
                 valid_metrics = validate(model, criterion, valid_loader, validation_size, batch_size, iter_size)
                 self._write_event(**valid_metrics)
-                self._log_visdom(epoch, valid_metrics, epoch_loss)
+                self.lr_logger.log(epoch, lr)
+                self.train_loss_logger.log(epoch, epoch_loss)
+                self.test_loss_logger.log(epoch, valid_metrics['valid_loss'])
+                self.test_accuracy_logger.log(epoch, valid_metrics['valid_acc'])
                 valid_loss = valid_metrics['valid_loss']
                 valid_losses.append(valid_loss)
                 if valid_loss < self.best_valid_loss:
@@ -201,7 +208,7 @@ class Model(object):
                     self.best_valid_loss = valid_loss
                     shutil.copy(str(self.model_path), str(self.best_model_path))
                 elif patience and epoch - lr_reset_epoch > patience and min(valid_losses[-patience:]) > self.best_valid_loss:
-                    lr /= 1.1
+                    lr /= 2
                     lr_reset_epoch = epoch
                     optimizer = self._init_optimizer()
             except KeyboardInterrupt:
@@ -211,16 +218,6 @@ class Model(object):
                 print('done.')
                 break
         return
-
-    def _log_visdom(self, epoch, valid_metrics, train_loss):
-        try:
-            self.lr_logger.log(epoch, self.lr)
-            self.train_loss_logger.log(epoch, train_loss)
-            self.test_loss_logger.log(epoch, valid_metrics['valid_loss'])
-            self.test_accuracy_logger.log(epoch, valid_metrics['valid_acc'])
-        except Exception:
-            pass
-
 
     def _write_event(self, **data):
         data['step'] = self.step
@@ -241,12 +238,19 @@ class Model(object):
         test_augm = valid_augm()
         label_map = pd.read_csv("../data/labels_map.csv")
         label_map.index = label_map['label_id']
-        test_loader = get_test_loader(batch_size, test_augm)
+        test_loader = get_test_loader(batch_size)
         with open(f"../results/{architecture}/{name}_{fold}.csv", "w") as f:
             f.write("_id,category_id\n")
-            for images, product_ids in tqdm.tqdm(test_loader):
-                images = variable(images)
-                preds = model(images).data.cpu().numpy()
+            for images_origin, product_ids in tqdm.tqdm(test_loader):
+                preds = None
+                for _ in range(tta):
+                    images = torch.stack([test_augm(i) for i in images_origin])
+                    images = variable(images)
+                    pred = model(images).data.cpu().numpy()
+                    if preds is None:
+                        preds = pred
+                    else:
+                        preds += pred
                 for pred, product_id in zip(preds, product_ids):
                     label = np.argmax(pred, 0)
                     cat_id = label_map.ix[label]['category_id']
