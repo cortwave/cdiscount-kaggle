@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from cv2 import imread, resize
 from keras.applications.resnet50 import preprocess_input
+from keras.applications.xception import preprocess_input as preprocess_xcept
 from keras.models import load_model
 from fire import Fire
 from imgaug import augmenters as iaa
@@ -36,13 +37,13 @@ def main(model_name):
 
         model = load_model(model_path, compile=False)
         for batch in tqdm(batches, desc=f'Batches processed for {model_path}'):
-            images = np.array([resize(imread(img_path), (150, 150)) for img_path in batch])
+            images = np.array([resize(imread(img_path), (180, 180)) for img_path in batch])
             ids = [x.split('/')[-1].split('_')[0] for x in batch]
 
             if TTA_ROUNDS:
                 for _ in range(TTA_ROUNDS):
                     images = cropper.augment_images(images).astype('float32')
-                    images = preprocess_input(images)
+                    images = preprocess_xcept(images)
 
                     labels = model.predict(images).argmax(axis=-1)
                     labels = (labels_map[x] for x in labels)
@@ -51,7 +52,7 @@ def main(model_name):
                         result.append({'_id': id_, 'category_id': label})
             else:
                 images = cropper.augment_images(images).astype('float32')
-                images = preprocess_input(images)
+                images = preprocess_xcept(images)
 
                 labels = model.predict(images).argmax(axis=-1)
                 labels = (labels_map[x] for x in labels)
@@ -61,7 +62,6 @@ def main(model_name):
 
         pd.DataFrame(result).to_csv(f'../results/submit_{model_path.split("/")[-1].split(".")[0]}.csv.gz',
                                     index=False, compression='gzip')
-        # pd.DataFrame(result).to_csv(f'../results/submit_{model_name}.csv.gz', index=False, compression='gzip')
 
 
 if __name__ == '__main__':

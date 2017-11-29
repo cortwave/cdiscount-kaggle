@@ -21,7 +21,7 @@ def main(mask):
     acc = [{'_id': k, 'category_id': Counter(v).most_common(1)[0][0]}
            for k, v in tqdm(acc.items(), desc='voting')]
     df = pd.DataFrame(acc)
-    df.to_csv(f'results/blended_{mask}.csv.gzip', index=False,
+    df.to_csv(f'results/blended_{mask}.csv.gz', index=False,
               compression='gzip')
 
 

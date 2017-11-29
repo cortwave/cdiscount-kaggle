@@ -1,5 +1,4 @@
 import logging
-from os import environ
 
 import numpy as np
 import pandas as pd
@@ -11,7 +10,7 @@ from keras.applications.inception_resnet_v2 import InceptionResNetV2
 from keras.models import Model, load_model
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
 from keras.optimizers import Nadam, SGD
-from keras.layers import Dense
+from keras.layers import Dense, Dropout
 from keras.utils import to_categorical
 from fire import Fire
 from imgaug import augmenters as iaa
@@ -44,10 +43,9 @@ class Dataset:
         self.transform = transform
         self.shape = shape
         self.aug = aug
-        self.augmenter = iaa.Sequential([iaa.Fliplr(p=.25),
-                                         iaa.Flipud(p=.25),
+        self.augmenter = iaa.Sequential([iaa.Fliplr(p=.3),
                                          iaa.Crop(px=((0, 20), (0, 20), (0, 20), (0, 20)), keep_size=True)
-                                         # iaa.GaussianBlur(sigma=(.05, .3))
+                                         iaa.GaussianBlur(sigma=(.01, .2))
                                          ],
                                         random_order=False)
 
@@ -107,6 +105,7 @@ def get_model(model_name, n_classes):
         raise ValueError('Network name is undefined')
 
     x = base_model.output
+    x = Dropout(.2)(x)
     predictions = Dense(n_classes, activation='softmax')(x)
     model = Model(inputs=base_model.input, outputs=predictions)
 
@@ -142,8 +141,7 @@ def hard_sampler(model, datagen, batch_size):
         yield samples[batch2], targets[batch2]
 
 
-def fit_model(model_name, batch_size=64, n_fold=0, cuda='1', use_hard_samples=False):
-    # environ['CUDA_VISIBLE_DEVICES'] = str(cuda)
+def fit_model(model_name, batch_size=64, n_fold=0, use_hard_samples=False):
 
     train = Dataset(n_fold=n_fold,
                     n_folds=5,
