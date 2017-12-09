@@ -18,6 +18,7 @@ from fire import Fire
 import pandas as pd
 from model_factory import get_model
 from torchnet.logger import VisdomPlotLogger
+from skimage.io import imsave
 
 
 def validate(model, criterion, valid_loader, validation_size, batch_size, iter_size):
@@ -238,23 +239,18 @@ class Model(object):
         test_augm = valid_augm()
         label_map = pd.read_csv("../data/labels_map.csv")
         label_map.index = label_map['label_id']
-        test_loader = get_test_loader(batch_size)
+        test_dataset = TestDataset(transform=test_augm)
         with open(f"../results/{architecture}/{name}_{fold}.csv", "w") as f:
             f.write("_id,category_id\n")
-            for images_origin, product_ids in tqdm.tqdm(test_loader):
-                preds = None
-                for _ in range(tta):
-                    images = torch.stack([test_augm(i) for i in images_origin])
-                    images = variable(images)
-                    pred = model(images).data.cpu().numpy()
-                    if preds is None:
-                        preds = pred
-                    else:
-                        preds += pred
-                for pred, product_id in zip(preds, product_ids):
-                    label = np.argmax(pred, 0)
-                    cat_id = label_map.ix[label]['category_id']
-                    f.write(f"{product_id},{cat_id}\n")
+            for idx in tqdm.tqdm(range(len(test_dataset))):
+                images = torch.stack([test_dataset[idx][0] for i in range(tta)])
+                images = variable(images)
+                pred = model(images).data.cpu().numpy()
+                pred = sum(pred)
+                product_id = test_dataset[idx][1]
+                label = np.argmax(pred, 0)
+                cat_id = label_map.ix[label]['category_id']
+                f.write(f"{product_id},{cat_id}\n")
 
     def predict_validation(self, architecture, fold, tta, batch_size):
         n_classes = 5270

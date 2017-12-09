@@ -1,5 +1,6 @@
 from torchvision.models import squeezenet1_1, resnet152, resnet34, resnet50, resnet101, densenet121, densenet161, densenet169, densenet201
 from se_net.se_resnet import se_resnet18, se_resnet34, se_resnet50, se_resnet101, se_resnet152
+from resnet.resnet import resnet50 as resnet50_dropout
 import torch.nn as nn
 from dpn import model_factory as dpn_factory
 from se_net.se_inception import SEInception3
@@ -28,6 +29,8 @@ def get_model(num_classes, architecture):
             model = resnet101(pretrained=True).cuda()
         elif architecture == 'resnet152':
             model = resnet152(pretrained=True).cuda()
+        elif architecture == 'resnet50_dropout':
+            model = resnet50_dropout(pretrained=True).cuda()
         if model is not None:
             model.fc = nn.Linear(model.fc.in_features, num_classes).cuda()
             model.avgpool = nn.AdaptiveAvgPool2d(1)
