@@ -1,9 +1,7 @@
 import logging
-from os import environ
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 from cv2 import imread, resize
 from keras.applications.resnet50 import ResNet50, preprocess_input
 from keras.applications.inception_v3 import InceptionV3, preprocess_input as preprocess_xcept
@@ -12,7 +10,7 @@ from keras.applications.inception_resnet_v2 import InceptionResNetV2
 from keras.models import Model, load_model
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
 from keras.optimizers import Nadam, SGD
-from keras.layers import Dense
+from keras.layers import Dense, Dropout
 from keras.utils import to_categorical
 from fire import Fire
 from imgaug import augmenters as iaa
@@ -45,10 +43,9 @@ class Dataset:
         self.transform = transform
         self.shape = shape
         self.aug = aug
-        self.augmenter = iaa.Sequential([iaa.Fliplr(p=.25),
-                                         iaa.Flipud(p=.25),
+        self.augmenter = iaa.Sequential([iaa.Fliplr(p=.3),
                                          iaa.Crop(px=((0, 20), (0, 20), (0, 20), (0, 20)), keep_size=True)
-                                         # iaa.GaussianBlur(sigma=(.05, .3))
+                                         iaa.GaussianBlur(sigma=(.01, .2))
                                          ],
                                         random_order=False)
 
@@ -82,7 +79,7 @@ def get_callbacks(model_name, fold):
     model_checkpoint = ModelCheckpoint(f'../results/{model_name}_{fold}.h5',
                                        monitor='val_loss',
                                        save_best_only=True, verbose=0)
-    es = EarlyStopping(monitor='val_loss', min_delta=0, patience=10, verbose=1, mode='auto')
+    es = EarlyStopping(monitor='val_loss', min_delta=0, patience=12, verbose=1, mode='auto')
     reducer = ReduceLROnPlateau(min_lr=1e-6, verbose=1, factor=0.1, patience=6)
     return [model_checkpoint, es, reducer]
 
@@ -108,6 +105,7 @@ def get_model(model_name, n_classes):
         raise ValueError('Network name is undefined')
 
     x = base_model.output
+    x = Dropout(.2)(x)
     predictions = Dense(n_classes, activation='softmax')(x)
     model = Model(inputs=base_model.input, outputs=predictions)
 
@@ -143,8 +141,7 @@ def hard_sampler(model, datagen, batch_size):
         yield samples[batch2], targets[batch2]
 
 
-def fit_model(model_name, batch_size=64, n_fold=0, cuda='1', use_hard_samples=False):
-    environ['CUDA_VISIBLE_DEVICES'] = str(cuda)
+def fit_model(model_name, batch_size=64, n_fold=0, use_hard_samples=False):
 
     train = Dataset(n_fold=n_fold,
                     n_folds=5,
@@ -173,7 +170,7 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1', use_hard_samples=Fa
     frozen_epochs = 1
 
     try:
-        model = load_model(fname, custom_objects={'AdamAccum': AdamAccum})
+        model = load_model(fname, compile=False)
     except OSError:
         model.fit_generator(train.get_batch(batch_size),
                             epochs=frozen_epochs,
@@ -194,7 +191,7 @@ def fit_model(model_name, batch_size=64, n_fold=0, cuda='1', use_hard_samples=Fa
     model.compile(optimizer=SGD(clipvalue=4, momentum=.9, nesterov=True), loss='categorical_crossentropy',
                   metrics=['accuracy'])
     model.fit_generator(train.get_batch(batch_size),
-                        epochs=50,
+                        epochs=500,
                         steps_per_epoch=2000,
                         validation_data=val.get_batch(batch_size),
                         workers=8,
