@@ -2,19 +2,16 @@ import logging
 
 import numpy as np
 import pandas as pd
-from cv2 import imread, resize
-from keras.applications.resnet50 import ResNet50, preprocess_input
-from keras.applications.inception_v3 import InceptionV3, preprocess_input as preprocess_xcept
-from keras.applications.xception import Xception
-from keras.applications.inception_resnet_v2 import InceptionResNetV2
+from cv2 import imread
+from keras.applications.xception import Xception, preprocess_input as preprocess_xcept
+from keras.applications.inception_resnet_v2 import InceptionResNetV2, preprocess_input
 from keras.models import Model, load_model
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
 from keras.optimizers import Nadam, SGD
 from keras.layers import Dense, Dropout
 from keras.utils import to_categorical
 from fire import Fire
-from imgaug import augmenters as iaa
-from keras_utils import threadsafe_generator, AdamAccum
+from keras_utils import threadsafe_generator
 
 logging.getLogger('tensorflow').setLevel(logging.WARNING)
 logging.basicConfig(level=logging.INFO,
@@ -43,17 +40,27 @@ class Dataset:
         self.transform = transform
         self.shape = shape
         self.aug = aug
-        self.augmenter = iaa.Sequential([iaa.Fliplr(p=.3),
-                                         iaa.Crop(px=((0, 20), (0, 20), (0, 20), (0, 20)), keep_size=True)
-                                         iaa.GaussianBlur(sigma=(.01, .2))
-                                         ],
-                                        random_order=False)
+
+
+    @staticmethod
+    def _crop(img, shape, option):
+        margin = 180 - shape
+        half = int(margin / 2)
+        crops = [lambda x: x[:-margin, :-margin, ...],
+                 lambda x: x[:-margin, margin:, ...],
+                 lambda x: x[margin:, margin:, ...],
+                 lambda x: x[margin:, :-margin, ...],
+                 lambda x: x[half:-half, half:-half, ...],
+                 ]
+
+        return crops[option](img)
 
     def _load(self, image):
         img = imread(f"/media/ssd/train/{image}.jpg")
-        # img = imread(f"../data/images/train/{image}.jpg")
-        if self.shape != (180, 180):
-            img = resize(img, self.shape)
+        img = self._crop(img, self.shape, np.random.randint(0, 5))
+        if np.random.rand() > .7:
+            img = np.fliplr(img)
+
         return img
 
     @threadsafe_generator
@@ -66,8 +73,6 @@ class Dataset:
     def _get_images(self, idx_batch):
         X = np.array([self._load(self.images[idx]) for idx in idx_batch]).astype('float32')
 
-        if self.aug:
-            X = self.augmenter.augment_images(X)
         if self.transform:
             X = self.transform(X)
         y = to_categorical(self.labels[idx_batch],
@@ -85,27 +90,21 @@ def get_callbacks(model_name, fold):
 
 
 def get_model(model_name, n_classes):
-    if model_name == 'resnet':
-        base_model = ResNet50(weights='imagenet', include_top=False, input_shape=(197, 197, 3), pooling='avg')
-        preprocess = preprocess_input
-        shape = (197, 197)
-    elif model_name == 'inception':
-        base_model = InceptionV3(include_top=False, input_shape=(180, 180, 3), pooling='avg')
+    if model_name == 'xception':
+        shape = 150
+        base_model = Xception(include_top=False, input_shape=(shape, shape, 3), pooling='avg')
         preprocess = preprocess_xcept
-        shape = (180, 180)
-    elif model_name == 'xception':
-        base_model = Xception(include_top=False, input_shape=(180, 180, 3), pooling='avg')
-        preprocess = preprocess_xcept
-        shape = (180, 180)
+        drop = .1
     elif model_name == 'incres':
-        base_model = InceptionResNetV2(include_top=False, input_shape=(150, 150, 3), pooling='avg')
+        shape = 150
+        base_model = InceptionResNetV2(include_top=False, input_shape=(shape, shape, 3), pooling='avg')
         preprocess = preprocess_input
-        shape = (150, 150)
+        drop = .4
     else:
         raise ValueError('Network name is undefined')
 
     x = base_model.output
-    x = Dropout(.2)(x)
+    x = Dropout(drop)(x)
     predictions = Dense(n_classes, activation='softmax')(x)
     model = Model(inputs=base_model.input, outputs=predictions)
 
@@ -116,32 +115,7 @@ def get_model(model_name, n_classes):
     return model, preprocess, shape
 
 
-def hard_sampler(model, datagen, batch_size):
-    logger.info('Sampler started')
-    while True:
-        samples, targets = [], []
-        while len(samples) < batch_size:
-            x_data, y_data = next(datagen)
-            preds = model.predict(x_data)
-            errors = np.abs(preds - y_data).max(axis=-1) > .99
-            samples += x_data[errors].tolist()
-            targets += y_data[errors].tolist()
-
-        regular_samples = batch_size * 2 - len(samples)
-        x_data, y_data = next(datagen)
-        samples += x_data[:regular_samples].tolist()
-        targets += y_data[:regular_samples].tolist()
-
-        samples, targets = map(np.array, (samples, targets))
-
-        idx = np.arange(batch_size * 2)
-        np.random.shuffle(idx)
-        batch1, batch2 = np.split(idx, 2)
-        yield samples[batch1], targets[batch1]
-        yield samples[batch2], targets[batch2]
-
-
-def fit_model(model_name, batch_size=64, n_fold=0, use_hard_samples=False):
+def fit_model(model_name, batch_size=64, n_fold=0):
 
     train = Dataset(n_fold=n_fold,
                     n_folds=5,
@@ -200,23 +174,6 @@ def fit_model(model_name, batch_size=64, n_fold=0, use_hard_samples=False):
                         callbacks=get_callbacks(model_name, n_fold),
                         initial_epoch=frozen_epochs,
                         )
-
-    if use_hard_samples:
-        x, y = next(train.get_batch(batch_size))
-        model.predict(x)
-        # for some mysterious reasons it fails without this run if the model has just been loaded
-        # ValueError: Tensor Tensor("dense_1_1/Softmax:0", shape=(?, 5270), dtype=float32) is not an element of this graph.
-
-        logger.info('Switching to hard sampler')
-        model.fit_generator(hard_sampler(model, train.get_batch(batch_size), batch_size=batch_size),
-                            epochs=500,
-                            steps_per_epoch=2000,
-                            validation_data=val.get_batch(batch_size),
-                            workers=1,
-                            use_multiprocessing=False,
-                            validation_steps=100,
-                            initial_epoch=frozen_epochs + 50,
-                            )
 
 
 if __name__ == '__main__':

@@ -1,15 +1,14 @@
 import logging
+import json
 from glob import glob
 
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
-from cv2 import imread, resize
-from keras.applications.resnet50 import preprocess_input
+from cv2 import imread
 from keras.applications.xception import preprocess_input as preprocess_xcept
 from keras.models import load_model
 from fire import Fire
-from imgaug import augmenters as iaa
 
 logging.getLogger('tensorflow').setLevel(logging.WARNING)
 logging.basicConfig(level=logging.INFO,
@@ -17,51 +16,73 @@ logging.basicConfig(level=logging.INFO,
                     datefmt='%H:%M:%S', )
 logger = logging.getLogger(__name__)
 
-TTA_ROUNDS = 0
+
+def crop(img, shape, option):
+    margin = 180 - shape
+    half = int(margin / 2)
+    crops = [lambda x: x[:-margin, :-margin, ...],
+             lambda x: x[:-margin, margin:, ...],
+             lambda x: x[margin:, margin:, ...],
+             lambda x: x[margin:, :-margin, ...],
+             lambda x: x[half:-half, half:-half, ...],
+             ]
+
+    return crops[option](img)
 
 
-def main(model_name):
+def load_img(img_path, crop_option, shape=150):
+    img = imread(img_path)
+
+    img = crop(img, shape, crop_option)
+    if np.random.rand() > .7:
+        img = np.fliplr(img)
+
+    return img
+
+
+def main(model_name, use_tail=False):
     batch_size = 256
 
     labels_map = pd.read_csv("../data/labels_map.csv")
     labels_map = {k: v for k, v in zip(labels_map.label_id, labels_map.category_id)}
 
-    test_files = glob('../data/images/test/*_0.jpg')
+    if use_tail:
+        test_files = list(set(glob('../data/images/test/*.jpg')) - set(glob('../data/images/test/*_0.jpg')))
+    else:
+        test_files = glob('../data/images/test/*_0.jpg')
+
     models = glob(f'../results/{model_name}*.h5')
 
-    cropper = iaa.Crop(px=((0, 20), (0, 20), (0, 20), (0, 20)), keep_size=True)
     batches = np.array_split(test_files, (len(test_files) // batch_size) + 1)
 
     for model_path in models:
-        result = []
-
         model = load_model(model_path, compile=False)
-        for batch in tqdm(batches, desc=f'Batches processed for {model_path}'):
-            images = np.array([resize(imread(img_path), (180, 180)) for img_path in batch])
-            ids = [x.split('/')[-1].split('_')[0] for x in batch]
 
-            if TTA_ROUNDS:
-                for _ in range(TTA_ROUNDS):
-                    images = cropper.augment_images(images).astype('float32')
+        fname = f'../results/submit_{model_path.split("/")[-1].split(".")[0]}.json'
+        if use_tail:
+            fname = fname.replace('.json', '_tail.json')
+
+        with open(fname, 'w') as out:
+            for batch in tqdm(batches, desc=f'Batches processed for {model_path}'):
+                ids = [x.split('/')[-1].split('_')[0] for x in batch]
+                tta_proba = []
+
+                for crop_option in range(0, 5):
+                    images = np.array([load_img(img_path, crop_option) for img_path in batch]).astype('float32')
                     images = preprocess_xcept(images)
 
-                    labels = model.predict(images).argmax(axis=-1)
-                    labels = (labels_map[x] for x in labels)
+                    labels = model.predict(images)
+                    tta_proba.append(labels)
 
-                    for label, id_ in zip(labels, ids):
-                        result.append({'_id': id_, 'category_id': label})
-            else:
-                images = cropper.augment_images(images).astype('float32')
-                images = preprocess_xcept(images)
-
-                labels = model.predict(images).argmax(axis=-1)
-                labels = (labels_map[x] for x in labels)
+                labels = np.round(np.mean(tta_proba, axis=0), 2)
 
                 for label, id_ in zip(labels, ids):
-                    result.append({'_id': id_, 'category_id': label})
-
-        pd.DataFrame(result).to_csv(f'../results/submit_{model_path.split("/")[-1].split(".")[0]}.csv.gz',
-                                    index=False, compression='gzip')
+                    d = {'_id': id_}
+                    for i, proba in enumerate(label):
+                        label_id = labels_map[i]
+                        if proba > .01:
+                            d[str(label_id)] = int(proba * 100)
+                    out.write(json.dumps(d) + '\n')
 
 
 if __name__ == '__main__':
