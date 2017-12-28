@@ -11,7 +11,6 @@ from keras.optimizers import Nadam, SGD
 from keras.layers import Dense, Dropout
 from keras.utils import to_categorical
 from fire import Fire
-from keras_utils import threadsafe_generator
 
 logging.getLogger('tensorflow').setLevel(logging.WARNING)
 logging.basicConfig(level=logging.INFO,
@@ -21,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class Dataset:
-    def __init__(self, n_fold, n_folds, shape, transform=None, train=True, aug=False):
+    def __init__(self, n_fold, n_folds, shape, batch_size, transform=None, train=True, aug=False):
         if train:
             folds = list(range(n_folds))
             folds.remove(n_fold)
@@ -40,7 +39,7 @@ class Dataset:
         self.transform = transform
         self.shape = shape
         self.aug = aug
-
+        self.batch_size = batch_size
 
     @staticmethod
     def _crop(img, shape, option):
@@ -63,13 +62,6 @@ class Dataset:
 
         return img
 
-    @threadsafe_generator
-    def get_batch(self, batch_size):
-        batch_size = int(batch_size)
-        while True:
-            idx = np.random.randint(0, self.num_images, batch_size)
-            yield self._get_images(idx)
-
     def _get_images(self, idx_batch):
         X = np.array([self._load(self.images[idx]) for idx in idx_batch]).astype('float32')
 
@@ -78,6 +70,10 @@ class Dataset:
         y = to_categorical(self.labels[idx_batch],
                            num_classes=self.num_classes)
         return X, y
+
+    def __next__(self):
+        idx = np.random.randint(0, self.num_images, self.batch_size)
+        return self._get_images(idx)
 
 
 def get_callbacks(model_name, fold):
@@ -116,7 +112,6 @@ def get_model(model_name, n_classes):
 
 
 def fit_model(model_name, batch_size=64, n_fold=0):
-
     train = Dataset(n_fold=n_fold,
                     n_folds=5,
                     transform=None,
@@ -131,14 +126,16 @@ def fit_model(model_name, batch_size=64, n_fold=0):
                     transform=preprocess,
                     train=True,
                     shape=shape,
-                    aug=False)
+                    aug=False,
+                    batch_size=batch_size)
 
-    val = Dataset(n_fold=0,
+    val = Dataset(n_fold=n_fold,
                   n_folds=5,
                   transform=preprocess,
                   train=False,
                   shape=shape,
-                  aug=False)
+                  aug=False,
+                  batch_size=batch_size)
 
     fname = f'../results/{model_name}_{n_fold}.h5'
     frozen_epochs = 1
@@ -146,10 +143,10 @@ def fit_model(model_name, batch_size=64, n_fold=0):
     try:
         model = load_model(fname, compile=False)
     except OSError:
-        model.fit_generator(train.get_batch(batch_size),
+        model.fit_generator(train,
                             epochs=frozen_epochs,
                             steps_per_epoch=1000,
-                            validation_data=val.get_batch(batch_size),
+                            validation_data=val,
                             workers=8,
                             validation_steps=100,
                             use_multiprocessing=False,
@@ -164,10 +161,10 @@ def fit_model(model_name, batch_size=64, n_fold=0):
 
     model.compile(optimizer=SGD(clipvalue=4, momentum=.9, nesterov=True), loss='categorical_crossentropy',
                   metrics=['accuracy'])
-    model.fit_generator(train.get_batch(batch_size),
+    model.fit_generator(train,
                         epochs=500,
                         steps_per_epoch=2000,
-                        validation_data=val.get_batch(batch_size),
+                        validation_data=val,
                         workers=8,
                         use_multiprocessing=False,
                         validation_steps=100,
